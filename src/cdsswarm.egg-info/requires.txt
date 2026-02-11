@@ -1,0 +1,10 @@
+cdsapi>=0.7
+requests
+tqdm
+
+[dev]
+pytest
+pyyaml
+
+[yaml]
+pyyaml

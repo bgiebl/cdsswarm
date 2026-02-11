@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cdsswarm"
+version = "0.1.0"
+description = "Concurrent CDS API downloader with TUI and script mode"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "cdsapi>=0.7",
+    "requests",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+yaml = ["pyyaml"]
+dev = [
+    "pytest",
+    "pyyaml",
+]
+
+[project.scripts]
+cdsswarm = "cdsswarm.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
