@@ -4,6 +4,8 @@ Concurrent [CDS API](https://cds.climate.copernicus.eu/) downloader with a curse
 
 Submit multiple CDS API requests and download them in parallel with a configurable number of workers. Monitor progress through an interactive terminal UI with per-worker status panels, or run headless in script mode for CI/cron jobs.
 
+![TUI screenshot](img/tui_screenshot.png)
+
 ## Installation
 
 ```bash
