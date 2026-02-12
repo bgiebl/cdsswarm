@@ -17,6 +17,7 @@ _CP_STATUS_RUNNING = 8
 _CP_STATUS_SUCCESS = 9
 _CP_WORKER_LABEL = 10
 _CP_STATUS_CANCELLED = 11
+_CP_HEADER = 12
 
 
 def _format_eta(seconds: float) -> str:
@@ -38,6 +39,7 @@ class CursesTUI:
     MIN_HEIGHT = 10
     MIN_WIDTH = 40
     PROGRESS_ROWS = 2
+    HEADER_ROWS = 1
 
     _STATUS_COLORS = {
         "accepted": _CP_STATUS_ACCEPTED,
@@ -47,8 +49,9 @@ class CursesTUI:
         "cancelled": _CP_STATUS_CANCELLED,
     }
 
-    def __init__(self, num_workers: int):
+    def __init__(self, num_workers: int, title: str = "cdsswarm"):
         self._num_workers = num_workers
+        self._title = title
         self._lock = threading.Lock()
         self._stdscr = None
         self._worker_status = ["idle"] * num_workers
@@ -60,6 +63,8 @@ class CursesTUI:
         self._progress_skipped = 0
         self._status_line = ""
         self._eta_start_time = None
+        self._focused_worker: int | None = None
+        self._scroll_offset = [0] * num_workers
 
     def start(self, stdscr):
         self._stdscr = stdscr
@@ -85,19 +90,49 @@ class CursesTUI:
         curses.init_pair(_CP_WORKER_LABEL, curses.COLOR_WHITE, curses.COLOR_CYAN)
         curses.init_pair(_CP_STATUS_CANCELLED, curses.COLOR_WHITE, curses.COLOR_MAGENTA)
         curses.init_pair(_CP_STATUS_RUNNING, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+        curses.init_pair(_CP_HEADER, curses.COLOR_WHITE, curses.COLOR_BLUE)
 
     def _panel_geometry(self):
         height, width = self._stdscr.getmaxyx()
-        usable = height - self.PROGRESS_ROWS
+        usable = height - self.PROGRESS_ROWS - self.HEADER_ROWS
+
+        if self._focused_worker is not None:
+            # Give all space to the focused worker
+            panels = []
+            for i in range(self._num_workers):
+                if i == self._focused_worker:
+                    panels.append((self.HEADER_ROWS, usable))
+                else:
+                    panels.append((0, 0))
+            return panels, width
+
         panel_h = max(3, usable // self._num_workers)
         panels = []
         for i in range(self._num_workers):
-            start = i * panel_h
-            h = panel_h if i < self._num_workers - 1 else (usable - start)
+            start = self.HEADER_ROWS + i * panel_h
+            h = panel_h if i < self._num_workers - 1 else (usable - i * panel_h)
             panels.append((start, h))
         return panels, width
 
+    def _draw_header(self, width):
+        scr = self._stdscr
+        scr.move(0, 0)
+        scr.clrtoeol()
+        hints = "[q] quit  [Tab] focus  [\u2191/\u2193] scroll"
+        title = f" {self._title}"
+        # Fill entire header row with the header color
+        header_text = title.ljust(width - 1)
+        scr.addnstr(0, 0, header_text, width - 1,
+                     curses.color_pair(_CP_HEADER) | curses.A_BOLD)
+        # Right-align the hints
+        hint_col = width - len(hints) - 2
+        if hint_col > len(title):
+            scr.addnstr(0, hint_col, hints, width - hint_col - 1,
+                         curses.color_pair(_CP_HEADER))
+
     def _draw_worker_panel(self, worker_id, start_row, height, width):
+        if height <= 0:
+            return
         scr = self._stdscr
 
         header_row = start_row
@@ -105,6 +140,8 @@ class CursesTUI:
         scr.clrtoeol()
 
         label = f" Worker {worker_id} "
+        if self._focused_worker == worker_id:
+            label += "[focused] "
         cds_status = self._worker_cds_status[worker_id]
         request_id = self._worker_request_id[worker_id]
 
@@ -142,7 +179,12 @@ class CursesTUI:
 
         interior_h = height - 2
         log = list(self._worker_logs[worker_id])
-        visible = log[-interior_h:]
+        offset = self._scroll_offset[worker_id]
+        if offset > 0 and offset < len(log):
+            visible_log = log[:len(log) - offset]
+        else:
+            visible_log = log
+        visible = visible_log[-interior_h:]
 
         for i in range(interior_h):
             row = start_row + 1 + i
@@ -176,11 +218,13 @@ class CursesTUI:
             text = f" [{bar}] {grand_done}/{grand_total}  {pct:.0f}%"
             if skipped:
                 text += f"  ({skipped} cached)"
-            if done > 0 and self._eta_start_time:
+            if self._eta_start_time:
                 elapsed = time.monotonic() - self._eta_start_time
-                remaining_tasks = pending - done
-                eta_seconds = (elapsed / done) * remaining_tasks
-                text += f"  ETA: {_format_eta(eta_seconds)}"
+                text += f"  Elapsed: {_format_eta(elapsed)}"
+                if done > 0:
+                    remaining_tasks = pending - done
+                    eta_seconds = (elapsed / done) * remaining_tasks
+                    text += f"  ETA: {_format_eta(eta_seconds)}"
             elif done == 0 and pending > 0:
                 text += "  ETA: estimating..."
         else:
@@ -193,6 +237,42 @@ class CursesTUI:
         scr.clrtoeol()
         if self._status_line:
             scr.addnstr(status_row, 0, " " + self._status_line[:width - 2], width - 1)
+
+    # -- Input handling methods (called from main thread) --
+
+    def handle_resize(self):
+        with self._lock:
+            if self._stdscr:
+                curses.resizeterm(*self._stdscr.getmaxyx())
+                self._stdscr.clear()
+                self._do_refresh()
+
+    def cycle_focus(self):
+        with self._lock:
+            if self._focused_worker is None:
+                self._focused_worker = 0
+            elif self._focused_worker >= self._num_workers - 1:
+                self._focused_worker = None
+            else:
+                self._focused_worker += 1
+            self._do_refresh()
+
+    def scroll_log_up(self):
+        with self._lock:
+            if self._focused_worker is not None:
+                wid = self._focused_worker
+                max_offset = max(0, len(self._worker_logs[wid]) - 1)
+                self._scroll_offset[wid] = min(
+                    self._scroll_offset[wid] + 3, max_offset,
+                )
+                self._do_refresh()
+
+    def scroll_log_down(self):
+        with self._lock:
+            if self._focused_worker is not None:
+                wid = self._focused_worker
+                self._scroll_offset[wid] = max(0, self._scroll_offset[wid] - 3)
+                self._do_refresh()
 
     # -- Thread-safe public methods --
 
@@ -220,12 +300,14 @@ class CursesTUI:
         with self._lock:
             if 0 <= worker_id < self._num_workers:
                 self._worker_logs[worker_id].append(message)
+                self._scroll_offset[worker_id] = 0
                 self._do_refresh()
 
     def clear_worker_log(self, worker_id):
         with self._lock:
             if 0 <= worker_id < self._num_workers:
                 self._worker_logs[worker_id].clear()
+                self._scroll_offset[worker_id] = 0
 
     def update_progress(self, completed, total, skipped):
         with self._lock:
@@ -255,9 +337,12 @@ class CursesTUI:
                 self._stdscr.addstr(0, 0, f"Terminal too small ({width}x{height})")
                 self._stdscr.refresh()
                 return
+            self._draw_header(width)
             panels, w = self._panel_geometry()
             for wid in range(self._num_workers):
-                self._draw_worker_panel(wid, *panels[wid], w)
+                start, h = panels[wid]
+                if h > 0:
+                    self._draw_worker_panel(wid, start, h, w)
             self._draw_progress_bar(height, w)
             self._stdscr.refresh()
         except curses.error:

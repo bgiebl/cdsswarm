@@ -49,7 +49,9 @@ class PlainTextAdapter(OutputAdapter):
         pass
 
     def on_task_message(self, worker_id, message):
-        pass
+        cds_status = parse_cds_status(message)
+        if cds_status:
+            self._write(f"  [worker {worker_id}] status: {cds_status}")
 
     def on_task_completed(self, worker_id, task, success, error=""):
         if success:

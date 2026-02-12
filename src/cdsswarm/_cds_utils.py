@@ -32,6 +32,105 @@ CDS_STATE_MAP = {
 CDS_REQUEST_ID_RE = re.compile(r"Request ID is ([\w-]+)")
 
 
+def normalize_request(request: dict) -> dict:
+    """Normalize CDS request params for comparison.
+
+    Converts all values to sorted-key dicts of string lists so that
+    ``"year": "2024"`` matches ``"year": ["2024"]``.
+    List order is preserved (important for positional params like ``area``).
+    """
+    normalized = {}
+    for key in sorted(request):
+        value = request[key]
+        if isinstance(value, (list, tuple)):
+            normalized[key] = [str(v) for v in value]
+        else:
+            normalized[key] = [str(value)]
+    return normalized
+
+
+def find_reusable_jobs(client, tasks, limit=200) -> dict[str, str]:
+    """Find existing CDS jobs that match the given tasks.
+
+    Queries the CADS ``GET /jobs`` endpoint for jobs whose dataset and
+    request parameters match.  Only works with the new ``ecmwf.datastores``
+    ``LegacyClient``; returns ``{}`` for old-style clients.
+
+    Returns:
+        Mapping of ``{task.target: job_request_id}`` for tasks with a
+        reusable server-side job.
+    """
+    # Only the new CADS LegacyClient exposes an inner ecmwf.datastores.Client
+    inner = getattr(client, "client", None)
+    if inner is None or not hasattr(inner, "get_remote"):
+        return {}
+
+    # Build lookup index: (dataset, normalized_request_key) -> list of targets
+    needed: dict[tuple, list[str]] = {}
+    task_by_target: dict[str, tuple[str, dict]] = {}
+    for task in tasks:
+        norm = normalize_request(task.request)
+        key = (task.dataset, _dict_key(norm))
+        needed.setdefault(key, []).append(task.target)
+        task_by_target[task.target] = (task.dataset, norm)
+
+    # Collect datasets we need so we can skip non-matching jobs cheaply
+    needed_datasets = {k[0] for k in needed}
+
+    reuse_map: dict[str, str] = {}
+    remaining = sum(len(v) for v in needed.values())
+
+    # Query jobs: successful first (ready to download), then running, then accepted
+    for status in ("successful", "running", "accepted"):
+        if remaining <= 0:
+            break
+        try:
+            _scan_jobs(inner, status, limit, needed_datasets, needed, reuse_map)
+        except Exception:
+            continue
+        remaining = sum(len(v) for v in needed.values())
+
+    return reuse_map
+
+
+def _dict_key(d: dict) -> tuple:
+    """Convert a normalized request dict to a hashable tuple for use as dict key."""
+    return tuple((k, tuple(v)) for k, v in sorted(d.items()))
+
+
+def _scan_jobs(inner, status, limit, needed_datasets, needed, reuse_map):
+    """Scan one page of jobs for the given status and populate reuse_map."""
+    try:
+        jobs_response = inner.get_jobs(
+            status=status, sortby="-created", limit=limit,
+        )
+    except Exception:
+        return
+
+    # Jobs are plain dicts in the paginated JSON response
+    jobs = jobs_response._json_dict.get("jobs", [])
+    for job in jobs:
+        process_id = job.get("processID")
+        if process_id not in needed_datasets:
+            continue
+        job_id = job.get("jobID")
+        if not job_id:
+            continue
+        try:
+            remote = inner.get_remote(job_id)
+            norm_job = normalize_request(dict(remote.request))
+        except Exception:
+            continue
+        key = (process_id, _dict_key(norm_job))
+        if key in needed:
+            targets = needed[key]
+            # Assign this job to the first unmatched target
+            target = targets.pop(0)
+            reuse_map[target] = job_id
+            if not targets:
+                del needed[key]
+
+
 def parse_cds_status(message: str) -> str | None:
     """Extract normalized CDS status from a log message."""
     for pattern in CDS_STATUS_PATTERNS:
@@ -91,12 +190,12 @@ def cancel_cds_request(client, request_id: str):
 def install_progress_router(adapter, worker_id_map, id_lock):
     """Monkey-patch tqdm so cdsapi download progress goes through our adapter.
 
-    Returns a list of (module, attr_name, original_value) for cleanup.
+    Returns a dict ``{"patches": [...], "devnull": file_handle}`` for cleanup.
     """
     try:
         import tqdm as tqdm_mod
     except ImportError:
-        return []
+        return {}
 
     orig_tqdm = tqdm_mod.tqdm
     _devnull = open(os.devnull, "w")
@@ -139,13 +238,21 @@ def install_progress_router(adapter, worker_id_map, id_lock):
             except Exception:
                 pass
 
-    return patched
+    return {"patches": patched, "devnull": _devnull}
 
 
-def uninstall_progress_router(patched):
-    """Restore original tqdm references."""
-    for mod, attr, orig in patched:
+def uninstall_progress_router(router_state):
+    """Restore original tqdm references and close the devnull file handle."""
+    if not router_state:
+        return
+    for mod, attr, orig in router_state.get("patches", []):
         try:
             setattr(mod, attr, orig)
+        except Exception:
+            pass
+    devnull = router_state.get("devnull")
+    if devnull is not None:
+        try:
+            devnull.close()
         except Exception:
             pass

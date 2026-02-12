@@ -91,41 +91,60 @@ class TestLoadRequests:
         with open(path, "w") as f:
             json.dump({"foo": "bar"}, f)
 
-        with pytest.raises(SystemExit):
+        with pytest.raises(ValueError, match="Unrecognized format"):
             load_requests(path)
 
 
 class TestCLIParsing:
-    def test_default_args(self, tmp_dir):
-        """Verify argparse defaults without invoking main."""
-        import argparse
-        from cdsswarm.cli import main
+    def test_default_args(self):
+        from cdsswarm.cli import _build_parser
 
-        # We test the parser directly
-        parser = argparse.ArgumentParser()
-        parser.add_argument("requests_file")
-        parser.add_argument("-w", "--workers", type=int, default=4)
-        parser.add_argument("-m", "--mode", default="auto")
-        parser.add_argument("--no-skip", action="store_true")
-
+        parser = _build_parser()
         args = parser.parse_args(["requests.json"])
+        assert args.requests_file == "requests.json"
         assert args.workers == 4
         assert args.mode == "auto"
         assert not args.no_skip
+        assert args.reuse is True
+        assert not args.dry_run
 
     def test_custom_args(self):
-        import argparse
+        from cdsswarm.cli import _build_parser
 
-        parser = argparse.ArgumentParser()
-        parser.add_argument("requests_file")
-        parser.add_argument("-w", "--workers", type=int, default=4)
-        parser.add_argument("-m", "--mode", default="auto")
-        parser.add_argument("--no-skip", action="store_true")
-
+        parser = _build_parser()
         args = parser.parse_args([
-            "my_requests.yaml", "-w", "8", "-m", "script", "--no-skip"
+            "my_requests.yaml", "-w", "8", "-m", "script", "--no-skip", "--dry-run",
         ])
         assert args.requests_file == "my_requests.yaml"
         assert args.workers == 8
         assert args.mode == "script"
         assert args.no_skip
+        assert args.dry_run
+
+    def test_mode_choices(self):
+        from cdsswarm.cli import _build_parser
+
+        parser = _build_parser()
+        # Valid choices should work
+        for mode in ("interactive", "script", "auto"):
+            args = parser.parse_args(["f.json", "-m", mode])
+            assert args.mode == mode
+        # Invalid choice should error
+        with pytest.raises(SystemExit):
+            parser.parse_args(["f.json", "-m", "invalid"])
+
+    def test_reuse_flag(self):
+        from cdsswarm.cli import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(["f.json", "--no-reuse"])
+        assert args.reuse is False
+        args = parser.parse_args(["f.json", "--reuse"])
+        assert args.reuse is True
+
+    def test_version(self, capsys):
+        from cdsswarm.cli import _build_parser
+
+        parser = _build_parser()
+        with pytest.raises(SystemExit, match="0"):
+            parser.parse_args(["--version"])

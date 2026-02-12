@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,6 +12,7 @@ import cdsapi
 
 from ._cds_utils import (
     cancel_cds_request,
+    find_reusable_jobs,
     install_progress_router,
     parse_request_id,
     silence_loggers,
@@ -52,7 +54,7 @@ class _WorkerState:
     task_worker_map: dict = field(default_factory=dict)
     active_requests: dict = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
-    next_id: list = field(default_factory=lambda: [0])
+    next_id: itertools.count = field(default_factory=itertools.count)
 
 
 class SwarmDownloader:
@@ -71,11 +73,18 @@ class SwarmDownloader:
         adapter: OutputAdapter,
         num_workers: int = 4,
         skip_existing: bool = True,
+        reuse_jobs: bool = False,
     ):
         self._all_tasks = list(tasks)
         self._adapter = adapter
         self._num_workers = num_workers
         self._skip_existing = skip_existing
+        self._reuse_jobs = reuse_jobs
+        self._cancel_event = threading.Event()
+
+    def cancel(self):
+        """Signal the downloader to cancel all in-flight requests."""
+        self._cancel_event.set()
 
     def run(self) -> list[Result] | None:
         """Execute all downloads. Returns list of Results, or None if interrupted."""
@@ -99,6 +108,22 @@ class SwarmDownloader:
         )
         self._adapter.on_progress_update(0, len(pending), skipped)
 
+        reuse_map: dict[str, str] = {}
+        if self._reuse_jobs and pending:
+            self._adapter.on_global_message("Checking for reusable CDS jobs...")
+            try:
+                lookup_client = cdsapi.Client(quiet=True, progress=False)
+                reuse_map = find_reusable_jobs(lookup_client, pending)
+            except Exception as exc:
+                self._adapter.on_global_message(
+                    f"Job reuse lookup failed ({exc}), submitting new requests"
+                )
+            else:
+                if reuse_map:
+                    self._adapter.on_global_message(
+                        f"Found {len(reuse_map)} reusable job(s)"
+                    )
+
         state = _WorkerState()
         results: list[Result] = []
         # Pre-populate results for skipped tasks
@@ -108,18 +133,27 @@ class SwarmDownloader:
                     results.append(Result(task=t, success=True))
 
         completed = 0
-        patched = install_progress_router(self._adapter, state.worker_id_map, state.lock)
+        router_state = install_progress_router(
+            self._adapter, state.worker_id_map, state.lock,
+        )
         pool = ThreadPoolExecutor(max_workers=self._num_workers)
         futures = {
-            pool.submit(self._download_one, task, state): task
+            pool.submit(
+                self._download_one, task, state, reuse_map.get(task.target),
+            ): task
             for task in pending
         }
 
         try:
             for future in as_completed(futures):
+                if self._cancel_event.is_set():
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    self._cancel_active(state)
+                    return None
                 task = futures[future]
                 completed += 1
                 wid = state.task_worker_map.get(task.target, 0)
+                self._adapter.on_progress_update(completed, len(pending), skipped)
                 try:
                     future.result()
                     self._adapter.on_task_completed(wid, task, True)
@@ -127,8 +161,8 @@ class SwarmDownloader:
                 except Exception as e:
                     self._adapter.on_task_completed(wid, task, False, str(e))
                     results.append(Result(task=task, success=False, error=str(e)))
-                self._adapter.on_progress_update(completed, len(pending), skipped)
         except KeyboardInterrupt:
+            self._cancel_event.set()
             self._adapter.on_global_message("Interrupted \u2014 cancelling...")
             pool.shutdown(wait=False, cancel_futures=True)
             self._cancel_active(state)
@@ -136,7 +170,7 @@ class SwarmDownloader:
         else:
             pool.shutdown(wait=True)
         finally:
-            uninstall_progress_router(patched)
+            uninstall_progress_router(router_state)
 
         all_ok = all(r.success for r in results)
         if all_ok:
@@ -146,7 +180,9 @@ class SwarmDownloader:
             self._adapter.on_global_message(f"{failed} download(s) failed.")
         return results
 
-    def _download_one(self, task: Task, state: _WorkerState):
+    def _download_one(
+        self, task: Task, state: _WorkerState, reuse_id: str | None = None,
+    ):
         """Download a single task. Runs in a worker thread."""
         wid = self._get_worker_id(state)
         with state.lock:
@@ -186,7 +222,18 @@ class SwarmDownloader:
         self._adapter.on_task_started(wid, task)
         os.makedirs(os.path.dirname(os.path.abspath(task.target)), exist_ok=True)
         try:
-            client.retrieve(task.dataset, task.request, task.target)
+            if reuse_id is not None:
+                self._adapter.on_task_message(
+                    wid, f"Reusing existing job {reuse_id}"
+                )
+                inner = getattr(client, "client", None)
+                if inner is not None:
+                    remote = inner.get_remote(reuse_id)
+                    remote.download(task.target)
+                else:
+                    client.retrieve(task.dataset, task.request, task.target)
+            else:
+                client.retrieve(task.dataset, task.request, task.target)
         finally:
             with state.lock:
                 state.active_requests.pop(task.target, None)
@@ -195,8 +242,7 @@ class SwarmDownloader:
         tid = threading.current_thread().ident
         with state.lock:
             if tid not in state.worker_id_map:
-                state.worker_id_map[tid] = state.next_id[0]
-                state.next_id[0] += 1
+                state.worker_id_map[tid] = next(state.next_id)
             return state.worker_id_map[tid]
 
     def _cancel_active(self, state: _WorkerState):

@@ -41,12 +41,10 @@ def load_requests(path: str) -> list[Task]:
             try:
                 import yaml
             except ImportError:
-                print(
-                    "Error: PyYAML is required for YAML files. "
-                    "Install it with: pip install cdsswarm[yaml]",
-                    file=sys.stderr,
+                raise ImportError(
+                    "PyYAML is required for YAML files. "
+                    "Install it with: pip install cdsswarm[yaml]"
                 )
-                sys.exit(1)
             data = yaml.safe_load(f)
         else:
             data = json.load(f)
@@ -72,8 +70,7 @@ def load_requests(path: str) -> list[Task]:
             for item in data["requests"]
         ]
 
-    print(f"Error: unrecognized format in {path}", file=sys.stderr)
-    sys.exit(1)
+    raise ValueError(f"Unrecognized format in {path}")
 
 
 def _resolve_mode(mode: str) -> str:
@@ -87,14 +84,15 @@ def _resolve_mode(mode: str) -> str:
     return "interactive"
 
 
-def _run_interactive(tasks: list[Task], num_workers: int, skip_existing: bool):
+def _run_interactive(
+    tasks: list[Task], num_workers: int, skip_existing: bool, reuse_jobs: bool = True,
+):
     """Launch curses TUI and run downloads inside it."""
     tui = CursesTUI(num_workers=num_workers)
-    interrupted = False
     results: list[Result] | None = None
 
     def _main(stdscr):
-        nonlocal interrupted, results
+        nonlocal results
         tui.start(stdscr)
         adapter = CursesAdapter(tui)
         downloader = SwarmDownloader(
@@ -102,31 +100,60 @@ def _run_interactive(tasks: list[Task], num_workers: int, skip_existing: bool):
             adapter=adapter,
             num_workers=num_workers,
             skip_existing=skip_existing,
+            reuse_jobs=reuse_jobs,
         )
-        results = downloader.run()
+
+        import threading as _thr
+        download_thread = _thr.Thread(target=_run_download, args=(downloader,), daemon=True)
+        download_thread.start()
+
+        # Input loop: poll at 200ms intervals
+        stdscr.timeout(200)
+        while download_thread.is_alive():
+            try:
+                key = stdscr.getch()
+            except curses.error:
+                continue
+            if key == ord("q"):
+                downloader.cancel()
+                tui.set_status_line("Cancelling...")
+                break
+            elif key == curses.KEY_RESIZE:
+                tui.handle_resize()
+            elif key == ord("\t"):
+                tui.cycle_focus()
+            elif key == curses.KEY_UP:
+                tui.scroll_log_up()
+            elif key == curses.KEY_DOWN:
+                tui.scroll_log_down()
+
+        download_thread.join(timeout=10)
+        results = _download_result[0]
+
         if results is None:
-            interrupted = True
             tui.set_status_line("Cancelled. Press any key to exit...")
-            tui.refresh()
-            stdscr.nodelay(False)
-            stdscr.getch()
         else:
             failed = sum(1 for r in results if not r.success)
             if failed:
                 tui.set_status_line(f"Done ({failed} failed). Press any key to exit...")
             else:
                 tui.set_status_line("Done! Press any key to exit...")
-            tui.refresh()
-            stdscr.nodelay(False)
-            stdscr.getch()
+        tui.refresh()
+        stdscr.timeout(-1)
+        stdscr.getch()
+
+    _download_result: list = [None]
+
+    def _run_download(downloader):
+        _download_result[0] = downloader.run()
 
     curses.wrapper(_main)
-    if interrupted:
-        os._exit(1)
     return results
 
 
-def _run_script(tasks: list[Task], num_workers: int, skip_existing: bool):
+def _run_script(
+    tasks: list[Task], num_workers: int, skip_existing: bool, reuse_jobs: bool = True,
+):
     """Run downloads with plain text output."""
     adapter = PlainTextAdapter()
     downloader = SwarmDownloader(
@@ -134,14 +161,22 @@ def _run_script(tasks: list[Task], num_workers: int, skip_existing: bool):
         adapter=adapter,
         num_workers=num_workers,
         skip_existing=skip_existing,
+        reuse_jobs=reuse_jobs,
     )
     return downloader.run()
 
 
-def main(argv: list[str] | None = None):
+def _build_parser() -> argparse.ArgumentParser:
+    from . import __version__
+
     parser = argparse.ArgumentParser(
         prog="cdsswarm",
         description="Concurrent CDS API downloader with TUI",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "requests_file",
@@ -164,25 +199,53 @@ def main(argv: list[str] | None = None):
         action="store_true",
         help="Re-download files that already exist",
     )
+    parser.add_argument(
+        "--reuse",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Reuse existing CDS jobs with matching parameters (default: enabled)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be downloaded without actually downloading",
+    )
+    return parser
 
+
+def main(argv: list[str] | None = None):
+    parser = _build_parser()
     args = parser.parse_args(argv)
 
     if not os.path.isfile(args.requests_file):
         print(f"Error: file not found: {args.requests_file}", file=sys.stderr)
         sys.exit(1)
 
-    tasks = load_requests(args.requests_file)
+    try:
+        tasks = load_requests(args.requests_file)
+    except (ImportError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
     if not tasks:
         print("No download tasks found in the requests file.", file=sys.stderr)
         sys.exit(1)
+
+    if args.dry_run:
+        print(f"{'Target':<50} {'Dataset':<40} {'Exists'}")
+        print("-" * 95)
+        for t in tasks:
+            exists = "skip" if os.path.isfile(t.target) else "download"
+            print(f"{t.target:<50} {t.dataset:<40} {exists}")
+        print(f"\n{len(tasks)} task(s) total")
+        sys.exit(0)
 
     mode = _resolve_mode(args.mode)
     skip_existing = not args.no_skip
 
     if mode == "interactive":
-        results = _run_interactive(tasks, args.workers, skip_existing)
+        results = _run_interactive(tasks, args.workers, skip_existing, args.reuse)
     else:
-        results = _run_script(tasks, args.workers, skip_existing)
+        results = _run_script(tasks, args.workers, skip_existing, args.reuse)
 
     if results is None:
         sys.exit(1)

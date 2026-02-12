@@ -22,16 +22,20 @@ Usage as a Python library:
     results = cdsswarm.download(tasks, num_workers=4)
 """
 
+from importlib.metadata import version as _pkg_version
+
 from .adapters import PlainTextAdapter
 from .core import Result, SwarmDownloader, Task
 
-__all__ = ["Task", "Result", "download"]
+__version__ = _pkg_version("cdsswarm")
+__all__ = ["Task", "Result", "download", "__version__"]
 
 
 def download(
     tasks: list[Task],
     num_workers: int = 4,
     skip_existing: bool = True,
+    reuse_jobs: bool = False,
     on_message=None,
 ) -> list[Result]:
     """Download multiple CDS API requests concurrently.
@@ -40,6 +44,7 @@ def download(
         tasks: List of Task objects specifying what to download.
         num_workers: Number of parallel download workers.
         skip_existing: Skip tasks whose target file already exists.
+        reuse_jobs: Reuse existing CDS jobs with matching parameters.
         on_message: Optional callback ``fn(message: str)`` for status messages.
 
     Returns:
@@ -51,6 +56,7 @@ def download(
         adapter=adapter,
         num_workers=num_workers,
         skip_existing=skip_existing,
+        reuse_jobs=reuse_jobs,
     )
     results = downloader.run()
     return results if results is not None else []

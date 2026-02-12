@@ -2,7 +2,7 @@
 
 import os
 import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -179,3 +179,109 @@ class TestSwarmDownloader:
         failures = [r for r in results if not r.success]
         assert len(successes) == 2
         assert len(failures) == 1
+
+    @patch("cdsswarm.core.find_reusable_jobs")
+    @patch("cdsswarm.core.cdsapi")
+    def test_reuse_job_uses_get_remote(self, mock_cdsapi, mock_find, tmp_dir):
+        """Reused job downloads via inner.get_remote() instead of retrieve()."""
+        tasks = _make_tasks(tmp_dir, count=1)
+        target = tasks[0].target
+
+        mock_find.return_value = {target: "existing-job-id"}
+
+        # Set up mock client with inner .client attribute
+        mock_inner = MagicMock()
+        mock_remote = MagicMock()
+        mock_remote.download.side_effect = lambda t: open(t, "w").close()
+        mock_inner.get_remote.return_value = mock_remote
+
+        mock_client = MagicMock()
+        mock_client.client = mock_inner
+        mock_cdsapi.Client.return_value = mock_client
+
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, reuse_jobs=True)
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 1
+        assert results[0].success
+        mock_inner.get_remote.assert_called_once_with("existing-job-id")
+        mock_remote.download.assert_called_once_with(target)
+        mock_client.retrieve.assert_not_called()
+
+    @patch("cdsswarm.core.find_reusable_jobs")
+    @patch("cdsswarm.core.cdsapi")
+    def test_non_matching_tasks_still_call_retrieve(self, mock_cdsapi, mock_find, tmp_dir):
+        """Tasks without a reuse match use normal retrieve()."""
+        tasks = _make_tasks(tmp_dir, count=2)
+
+        # Only the first task has a reuse match
+        mock_find.return_value = {tasks[0].target: "job-0"}
+
+        mock_inner = MagicMock()
+        mock_remote = MagicMock()
+        mock_remote.download.side_effect = lambda t: open(t, "w").close()
+        mock_inner.get_remote.return_value = mock_remote
+
+        mock_client = MagicMock()
+        mock_client.client = mock_inner
+        def fake_retrieve(dataset, request, target):
+            with open(target, "w") as f:
+                f.write("data")
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, reuse_jobs=True)
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 2
+        assert all(r.success for r in results)
+        # One reused, one fresh
+        mock_inner.get_remote.assert_called_once_with("job-0")
+        assert mock_client.retrieve.call_count == 1
+
+    @patch("cdsswarm.core.find_reusable_jobs")
+    @patch("cdsswarm.core.cdsapi")
+    def test_reuse_lookup_failure_falls_back(self, mock_cdsapi, mock_find, tmp_dir):
+        """Lookup failure gracefully falls back to new requests."""
+        mock_find.side_effect = RuntimeError("API unavailable")
+
+        mock_client = MagicMock()
+        def fake_retrieve(dataset, request, target):
+            with open(target, "w") as f:
+                f.write("data")
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, reuse_jobs=True)
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 1
+        assert results[0].success
+        assert mock_client.retrieve.call_count == 1
+
+    @patch("cdsswarm.core.find_reusable_jobs")
+    @patch("cdsswarm.core.cdsapi")
+    def test_reuse_disabled_skips_lookup(self, mock_cdsapi, mock_find, tmp_dir):
+        """reuse_jobs=False skips the lookup entirely."""
+        mock_client = MagicMock()
+        def fake_retrieve(dataset, request, target):
+            with open(target, "w") as f:
+                f.write("data")
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, reuse_jobs=False)
+        results = downloader.run()
+
+        assert results is not None
+        mock_find.assert_not_called()
+        assert mock_client.retrieve.call_count == 1
