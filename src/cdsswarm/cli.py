@@ -136,7 +136,20 @@ def _run_interactive(
                 elif key == curses.KEY_DOWN:
                     tui.select_down()
                 elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
-                    tui.toggle_expand()
+                    if tui._view_mode == "logs":
+                        tui.close_log_view()
+                    else:
+                        tui.open_log_view()
+                elif key == 27:  # Escape
+                    tui.close_log_view()
+                elif key == curses.KEY_PPAGE:
+                    tui.page_up()
+                elif key == curses.KEY_NPAGE:
+                    tui.page_down()
+                elif key == curses.KEY_HOME:
+                    tui.log_home()
+                elif key == curses.KEY_END:
+                    tui.log_end()
                 elif key == curses.KEY_MOUSE:
                     try:
                         mouse_event = curses.getmouse()

@@ -1,7 +1,9 @@
 """Curses-based TUI for displaying concurrent download worker status."""
 
 import curses
+import os
 import shutil
+import textwrap
 import threading
 import time
 from collections import deque
@@ -19,6 +21,7 @@ _CP_STATUS_SUCCESS = 9
 _CP_WORKER_LABEL = 10
 _CP_STATUS_CANCELLED = 11
 _CP_HEADER = 12
+_CP_WORKER_INDIGO = 13
 
 
 def _format_eta(seconds: float) -> str:
@@ -50,10 +53,11 @@ def _format_size(nbytes: int) -> str:
 class CursesTUI:
     """Terminal UI showing an htop-style worker table with a progress bar."""
 
-    MIN_HEIGHT = 10
+    MIN_HEIGHT = 15
     MIN_WIDTH = 40
     PROGRESS_ROWS = 2
-    HEADER_ROWS = 2  # title bar + column headers
+    HEADER_ROWS = 12  # title + info panel (10 rows) + column headers
+    _INFO_PANEL_PARAM_LINES = 4
 
     _STATUS_COLORS = {
         "accepted": _CP_STATUS_ACCEPTED,
@@ -64,13 +68,11 @@ class CursesTUI:
     }
 
     # Fixed column widths
-    _COL_WORKER = 8
+    _COL_W = 4
     _COL_STATUS = 12
     _COL_FILENAME = 20
-    _COL_TYPE = 6
     _COL_STARTED = 10
     _COL_ELAPSED = 10
-    _COL_FINISHED = 10
     _COL_SIZE = 10
     _COL_DL_PCT = 7
 
@@ -92,7 +94,6 @@ class CursesTUI:
 
         # htop-style table state
         self._selected_worker: int = 0
-        self._expanded_workers: set[int] = set()
         self._worker_start_time: list[float | None] = [None] * num_workers
         self._worker_finish_time: list[float | None] = [None] * num_workers
         self._worker_dl_bytes: list[int] = [0] * num_workers
@@ -100,6 +101,15 @@ class CursesTUI:
         self._worker_filename: list[str] = [""] * num_workers
         self._row_worker_map: dict[int, int] = {}
         self._table_scroll: int = 0
+
+        # Info panel data
+        self._worker_dataset: list[str] = [""] * num_workers
+        self._worker_request_params: list[dict] = [{}] * num_workers
+        self._worker_target: list[str] = [""] * num_workers
+
+        # Log view state
+        self._view_mode: str = "table"  # "table" or "logs"
+        self._log_scroll: int = 0
 
     def start(self, stdscr):
         self._stdscr = stdscr
@@ -121,10 +131,12 @@ class CursesTUI:
         curses.init_pair(_CP_STATUS_FAILED, curses.COLOR_WHITE, curses.COLOR_RED)
         if curses.COLORS >= 256:
             curses.init_pair(_CP_STATUS_ACCEPTED, curses.COLOR_BLACK, 208)
+            curses.init_pair(_CP_WORKER_INDIGO, 63, -1)
         else:
             curses.init_pair(
                 _CP_STATUS_ACCEPTED, curses.COLOR_BLACK, curses.COLOR_YELLOW
             )
+            curses.init_pair(_CP_WORKER_INDIGO, curses.COLOR_BLUE, -1)
         curses.init_pair(_CP_STATUS_SUCCESS, curses.COLOR_BLACK, curses.COLOR_GREEN)
         curses.init_pair(_CP_WORKER_LABEL, curses.COLOR_WHITE, curses.COLOR_CYAN)
         curses.init_pair(_CP_STATUS_CANCELLED, curses.COLOR_WHITE, curses.COLOR_MAGENTA)
@@ -137,8 +149,14 @@ class CursesTUI:
         scr = self._stdscr
         scr.move(0, 0)
         scr.clrtoeol()
-        hints = "[q] quit  [↑/↓] select  [Enter] expand"
-        title = f" {self._title}"
+        if self._view_mode == "logs":
+            wid = self._selected_worker
+            fname = self._worker_filename[wid] or "—"
+            hints = "[Esc] back  [↑/↓] scroll  [PgUp/PgDn] page  [q] quit"
+            title = f" Worker {wid} — {fname}"
+        else:
+            hints = "[q] quit  [↑/↓] select  [Enter] logs"
+            title = f" {self._title}"
         header_text = title.ljust(width - 1)
         scr.addnstr(
             0, 0, header_text, width - 1, curses.color_pair(_CP_HEADER) | curses.A_BOLD
@@ -149,9 +167,96 @@ class CursesTUI:
                 0, hint_col, hints, width - hint_col - 1, curses.color_pair(_CP_HEADER)
             )
 
+    def _draw_divider(self, row, width):
+        """Draw a horizontal divider line using box-drawing characters."""
+        scr = self._stdscr
+        scr.move(row, 0)
+        scr.clrtoeol()
+        line = "─" * (width - 1)
+        scr.addnstr(row, 0, line, width - 1, curses.A_DIM)
+
+    def _draw_info_panel(self, width):
+        """Draw the info panel for the selected worker (rows 1-10)."""
+        scr = self._stdscr
+        wid = self._selected_worker
+
+        filename = self._worker_filename[wid] or "—"
+        filetype = self._format_filetype(wid).upper()
+        request_id = self._worker_request_id[wid] or "—"
+        dataset = self._worker_dataset[wid] or "—"
+        target = self._worker_target[wid] or "—"
+        params = self._worker_request_params[wid]
+
+        # Row 1: Worker N │ Type: GRIB │ filename
+        worker_label = f" Worker {wid}"
+        rest_of_row1 = f" │ Type: {filetype} │ {filename}"
+        scr.move(1, 0)
+        scr.clrtoeol()
+        # Draw worker label in indigo
+        scr.addnstr(
+            1,
+            0,
+            worker_label,
+            min(len(worker_label), width - 1),
+            curses.color_pair(_CP_WORKER_INDIGO) | curses.A_BOLD,
+        )
+        col_after = len(worker_label)
+        if col_after < width - 1:
+            scr.addnstr(1, col_after, rest_of_row1, width - col_after - 1)
+
+        # Row 2: divider
+        self._draw_divider(2, width)
+
+        # Row 3: Destination
+        dest_dir = os.path.dirname(target) if target != "—" else "—"
+        row3 = f" Destination: {dest_dir}"
+        scr.move(3, 0)
+        scr.clrtoeol()
+        scr.addnstr(3, 0, row3[: width - 1], width - 1)
+
+        # Row 4: divider
+        self._draw_divider(4, width)
+
+        # Row 5: Request ID │ Dataset
+        row5 = f" Request ID: {request_id} │ Dataset: {dataset}"
+        scr.move(5, 0)
+        scr.clrtoeol()
+        scr.addnstr(5, 0, row5[: width - 1], width - 1)
+
+        # Row 6: divider
+        self._draw_divider(6, width)
+
+        # Rows 7-10: Params (up to 4 lines, ▼ if truncated)
+        if params:
+            param_str = "Params: " + ", ".join(f"{k}={v}" for k, v in params.items())
+        else:
+            param_str = "Params: —"
+
+        line_width = max(10, width - 2)  # 1 char margin each side
+        wrapped = textwrap.wrap(param_str, width=line_width)
+        if not wrapped:
+            wrapped = [param_str]
+        truncated = len(wrapped) > self._INFO_PANEL_PARAM_LINES
+
+        for i in range(self._INFO_PANEL_PARAM_LINES):
+            row = 7 + i
+            scr.move(row, 0)
+            scr.clrtoeol()
+            if i < len(wrapped):
+                line = f" {wrapped[i]}"
+                if truncated and i == self._INFO_PANEL_PARAM_LINES - 1:
+                    # Last visible line — show ▼ indicator at the right edge
+                    if len(line) < width - 2:
+                        line = line.ljust(width - 3) + " ▼"
+                    else:
+                        line = line[: width - 4] + " ▼"
+                scr.addnstr(row, 0, line[: width - 1], width - 1, curses.A_DIM)
+            else:
+                pass  # leave row blank
+
     def _draw_column_headers(self, width):
         scr = self._stdscr
-        row = 1
+        row = self.HEADER_ROWS - 1  # last row before table
         scr.move(row, 0)
         scr.clrtoeol()
 
@@ -171,26 +276,22 @@ class CursesTUI:
     def _column_specs(self, width):
         """Return list of (label, col_width) for the table columns."""
         fixed = (
-            self._COL_WORKER
+            self._COL_W
             + self._COL_STATUS
             + self._COL_FILENAME
-            + self._COL_TYPE
             + self._COL_STARTED
             + self._COL_ELAPSED
-            + self._COL_FINISHED
             + self._COL_SIZE
             + self._COL_DL_PCT
-            + 9  # 9 separators
+            + 7  # 7 separators
         )
         req_id_width = max(8, width - fixed)
         return [
-            ("Worker", self._COL_WORKER),
+            ("W", self._COL_W),
             ("Status", self._COL_STATUS),
             ("Filename", self._COL_FILENAME),
-            ("Type", self._COL_TYPE),
             ("Started", self._COL_STARTED),
             ("Elapsed", self._COL_ELAPSED),
-            ("Finished", self._COL_FINISHED),
             ("Size", self._COL_SIZE),
             ("DL %", self._COL_DL_PCT),
             ("Request ID", req_id_width),
@@ -200,16 +301,10 @@ class CursesTUI:
         scr = self._stdscr
         self._row_worker_map.clear()
 
-        # Build the list of screen rows: each worker takes 1 row, plus
-        # expanded workers add up to 3 log lines below
-        row_entries = []  # list of (worker_id, is_log_line, log_text)
+        # Build the list of screen rows: one per worker
+        row_entries = []
         for wid in range(self._num_workers):
-            row_entries.append((wid, False, ""))
-            if wid in self._expanded_workers:
-                logs = list(self._worker_logs[wid])
-                recent = logs[-3:] if logs else []
-                for line in recent:
-                    row_entries.append((wid, True, line))
+            row_entries.append(wid)
 
         # Apply scroll
         max_scroll = max(0, len(row_entries) - available_height)
@@ -220,22 +315,14 @@ class CursesTUI:
 
         cols = self._column_specs(width)
 
-        for i, (wid, is_log, log_text) in enumerate(visible):
+        for i, wid in enumerate(visible):
             screen_row = self.HEADER_ROWS + i
             scr.move(screen_row, 0)
             scr.clrtoeol()
 
-            if is_log:
-                # Draw log line: dimmed, indented
-                display = f"  Log: {log_text}"
-                scr.addnstr(
-                    screen_row, 0, display[: width - 1], width - 1, curses.A_DIM
-                )
-            else:
-                # Draw worker row
-                self._row_worker_map[screen_row] = wid
-                is_selected = wid == self._selected_worker
-                self._draw_worker_row(screen_row, wid, is_selected, cols, width)
+            self._row_worker_map[screen_row] = wid
+            is_selected = wid == self._selected_worker
+            self._draw_worker_row(screen_row, wid, is_selected, cols, width)
 
         # Clear remaining rows
         for i in range(len(visible), available_height):
@@ -248,13 +335,11 @@ class CursesTUI:
 
         # Build cell values
         indicator = "▸" if is_selected else " "
-        worker_str = f"{indicator} {wid}"
+        worker_str = f"{indicator}{wid}"
         cds_status = self._worker_cds_status[wid] or "idle"
         filename = self._worker_filename[wid] or "—"
-        filetype = self._format_filetype(wid)
         started = self._format_start_time(wid)
         elapsed = self._format_elapsed_time(wid)
-        finished = self._format_finish_time(wid)
         size = self._format_dl_size(wid)
         dl_pct = self._format_dl_pct(wid)
         request_id = self._worker_request_id[wid] or "—"
@@ -263,10 +348,8 @@ class CursesTUI:
             worker_str,
             cds_status,
             filename,
-            filetype,
             started,
             elapsed,
-            finished,
             size,
             dl_pct,
             request_id,
@@ -311,7 +394,7 @@ class CursesTUI:
                     scr.addnstr(
                         screen_row, col_pos, cell_text, min(w, remaining), row_attr
                     )
-            elif label == "Finished" and is_finished:
+            elif label in ("Elapsed", "DL %") and is_finished:
                 # Green background for completed tasks
                 scr.addnstr(
                     screen_row,
@@ -324,6 +407,29 @@ class CursesTUI:
                 scr.addnstr(screen_row, col_pos, cell_text, min(w, remaining), row_attr)
 
             col_pos += w
+
+    def _draw_log_view(self, width, available_height):
+        """Draw the full-screen log view for the selected worker."""
+        scr = self._stdscr
+        wid = self._selected_worker
+        logs = list(self._worker_logs[wid])
+
+        # Apply scroll
+        max_scroll = max(0, len(logs) - available_height)
+        self._log_scroll = max(0, min(self._log_scroll, max_scroll))
+        visible = logs[self._log_scroll : self._log_scroll + available_height]
+
+        for i, line in enumerate(visible):
+            screen_row = 1 + i  # start after title bar
+            scr.move(screen_row, 0)
+            scr.clrtoeol()
+            scr.addnstr(screen_row, 0, line[: width - 1], width - 1)
+
+        # Clear remaining rows
+        for i in range(len(visible), available_height):
+            screen_row = 1 + i
+            scr.move(screen_row, 0)
+            scr.clrtoeol()
 
     def _draw_progress_bar(self, height, width):
         scr = self._stdscr
@@ -390,12 +496,6 @@ class CursesTUI:
             return "—"
         return fname[dot + 1 :]
 
-    def _format_finish_time(self, wid):
-        t = self._worker_finish_time[wid]
-        if t is None:
-            return "—"
-        return time.strftime("%H:%M:%S", time.localtime(t))
-
     def _format_dl_size(self, wid):
         total = self._worker_dl_total[wid]
         if total <= 0:
@@ -420,26 +520,70 @@ class CursesTUI:
 
     def select_up(self):
         with self._lock:
-            self._selected_worker = max(0, self._selected_worker - 1)
-            self._ensure_selected_visible()
+            if self._view_mode == "logs":
+                self._log_scroll = max(0, self._log_scroll - 1)
+            else:
+                self._selected_worker = max(0, self._selected_worker - 1)
+                self._ensure_selected_visible()
             self._do_refresh()
 
     def select_down(self):
         with self._lock:
-            self._selected_worker = min(
-                self._num_workers - 1, self._selected_worker + 1
-            )
-            self._ensure_selected_visible()
+            if self._view_mode == "logs":
+                self._log_scroll += 1  # clamped in _draw_log_view
+            else:
+                self._selected_worker = min(
+                    self._num_workers - 1, self._selected_worker + 1
+                )
+                self._ensure_selected_visible()
             self._do_refresh()
 
-    def toggle_expand(self):
+    def open_log_view(self):
         with self._lock:
-            wid = self._selected_worker
-            if wid in self._expanded_workers:
-                self._expanded_workers.discard(wid)
-            else:
-                self._expanded_workers.add(wid)
+            self._view_mode = "logs"
+            self._log_scroll = max(0, len(self._worker_logs[self._selected_worker]) - 1)
             self._do_refresh()
+
+    def close_log_view(self):
+        with self._lock:
+            self._view_mode = "table"
+            self._do_refresh()
+
+    def page_up(self):
+        with self._lock:
+            if self._view_mode == "logs":
+                if self._stdscr:
+                    height, _ = self._stdscr.getmaxyx()
+                    page = height - self.PROGRESS_ROWS - 1
+                else:
+                    page = 10
+                self._log_scroll = max(0, self._log_scroll - page)
+                self._do_refresh()
+
+    def page_down(self):
+        with self._lock:
+            if self._view_mode == "logs":
+                if self._stdscr:
+                    height, _ = self._stdscr.getmaxyx()
+                    page = height - self.PROGRESS_ROWS - 1
+                else:
+                    page = 10
+                self._log_scroll += page  # clamped in _draw_log_view
+                self._do_refresh()
+
+    def log_home(self):
+        with self._lock:
+            if self._view_mode == "logs":
+                self._log_scroll = 0
+                self._do_refresh()
+
+    def log_end(self):
+        with self._lock:
+            if self._view_mode == "logs":
+                self._log_scroll = max(
+                    0, len(self._worker_logs[self._selected_worker]) - 1
+                )
+                self._do_refresh()
 
     def select_worker(self, worker_id):
         with self._lock:
@@ -454,6 +598,9 @@ class CursesTUI:
         mouse_event: tuple from curses.getmouse() — (id, x, y, z, bstate)
         """
         with self._lock:
+            if self._view_mode == "logs":
+                # In log view, ignore mouse
+                return
             _, mx, my, _, bstate = mouse_event
             if bstate & curses.BUTTON1_CLICKED:
                 wid = self._row_worker_map.get(my)
@@ -463,10 +610,8 @@ class CursesTUI:
                 wid = self._row_worker_map.get(my)
                 if wid is not None:
                     self._selected_worker = wid
-                    if wid in self._expanded_workers:
-                        self._expanded_workers.discard(wid)
-                    else:
-                        self._expanded_workers.add(wid)
+                    self._view_mode = "logs"
+                    self._log_scroll = max(0, len(self._worker_logs[wid]) - 1)
             elif bstate & curses.BUTTON4_PRESSED:
                 # Scroll up
                 self._selected_worker = max(0, self._selected_worker - 1)
@@ -481,15 +626,7 @@ class CursesTUI:
 
     def _ensure_selected_visible(self):
         """Adjust table_scroll so the selected worker row is visible."""
-        # Build row index for selected worker
-        row_idx = 0
-        for wid in range(self._num_workers):
-            if wid == self._selected_worker:
-                break
-            row_idx += 1
-            if wid in self._expanded_workers:
-                logs = list(self._worker_logs[wid])
-                row_idx += min(3, len(logs))
+        row_idx = self._selected_worker
 
         if self._stdscr:
             height, _ = self._stdscr.getmaxyx()
@@ -534,6 +671,14 @@ class CursesTUI:
         with self._lock:
             if 0 <= worker_id < self._num_workers:
                 self._worker_finish_time[worker_id] = time.time()
+                self._do_refresh()
+
+    def set_worker_task_info(self, worker_id, dataset, request_params, target=""):
+        with self._lock:
+            if 0 <= worker_id < self._num_workers:
+                self._worker_dataset[worker_id] = dataset
+                self._worker_request_params[worker_id] = request_params
+                self._worker_target[worker_id] = target
                 self._do_refresh()
 
     def update_worker_progress(self, worker_id, downloaded_bytes, total_bytes):
@@ -596,11 +741,18 @@ class CursesTUI:
                 self._stdscr.erase()
                 self._last_size = cur_size
 
-            self._draw_header(width)
-            self._draw_column_headers(width)
-            available_height = height - self.HEADER_ROWS - self.PROGRESS_ROWS
-            self._draw_table(width, available_height)
-            self._draw_progress_bar(height, width)
+            if self._view_mode == "logs":
+                self._draw_header(width)
+                log_height = height - self.PROGRESS_ROWS - 1  # 1 for title bar
+                self._draw_log_view(width, log_height)
+                self._draw_progress_bar(height, width)
+            else:
+                self._draw_header(width)
+                self._draw_info_panel(width)
+                self._draw_column_headers(width)
+                available_height = height - self.HEADER_ROWS - self.PROGRESS_ROWS
+                self._draw_table(width, available_height)
+                self._draw_progress_bar(height, width)
             self._stdscr.noutrefresh()
             curses.doupdate()
         except curses.error:

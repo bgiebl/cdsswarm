@@ -25,6 +25,22 @@ FILENAMES = [
     "era5_radiation_2024_{:02d}.nc",
 ]
 
+# Simulated datasets and request params
+DATASETS = [
+    "reanalysis-era5-single-levels",
+    "reanalysis-era5-pressure-levels",
+    "reanalysis-cerra-single-levels",
+]
+
+VARIABLES = [
+    "2m_temperature",
+    "10m_u_component_of_wind",
+    "total_precipitation",
+    "surface_pressure",
+    "soil_temperature_level_1",
+    "surface_net_solar_radiation",
+]
+
 
 def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
     """Simulate download activity by driving the TUI directly.
@@ -47,7 +63,20 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
         fname = tpl.format(random.randint(1, 12))
         size = random.randint(50 * 1024**2, 8 * 1024**3)  # 50 MB - 8 GB
         request_id = str(uuid.uuid4())
-        task_queue.append((fname, size, request_id))
+        dataset = random.choice(DATASETS)
+        variable = random.choice(VARIABLES)
+        month = random.randint(1, 12)
+        request_params = {
+            "product_type": "reanalysis",
+            "variable": variable,
+            "year": "2024",
+            "month": f"{month:02d}",
+            "day": [f"{d:02d}" for d in range(1, 32)],
+            "time": "00:00",
+            "format": "grib",
+        }
+        target = f"/data/downloads/{dataset}/{fname}"
+        task_queue.append((fname, size, request_id, dataset, request_params, target))
 
     active = {}  # worker_id -> state dict
     task_idx = 0
@@ -56,12 +85,13 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
         nonlocal task_idx
         if task_idx >= num_tasks:
             return False
-        fname, size, rid = task_queue[task_idx]
+        fname, size, rid, dataset, params, target = task_queue[task_idx]
         task_idx += 1
         tui.clear_worker_log(wid)
         tui.set_worker_filename(wid, fname)
         tui.set_worker_cds_status(wid, "accepted")
         tui.set_worker_request_id(wid, rid)
+        tui.set_worker_task_info(wid, dataset, params, target)
         tui.append_worker_log(wid, f"Started: {fname}")
         tui.append_worker_log(wid, f"Request ID is {rid}")
         active[wid] = {
@@ -183,7 +213,20 @@ def main():
                 elif key == curses.KEY_DOWN:
                     tui.select_down()
                 elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
-                    tui.toggle_expand()
+                    if tui._view_mode == "logs":
+                        tui.close_log_view()
+                    else:
+                        tui.open_log_view()
+                elif key == 27:  # Escape
+                    tui.close_log_view()
+                elif key == curses.KEY_PPAGE:
+                    tui.page_up()
+                elif key == curses.KEY_NPAGE:
+                    tui.page_down()
+                elif key == curses.KEY_HOME:
+                    tui.log_home()
+                elif key == curses.KEY_END:
+                    tui.log_end()
                 elif key == curses.KEY_MOUSE:
                     try:
                         mouse_event = curses.getmouse()

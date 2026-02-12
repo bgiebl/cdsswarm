@@ -149,15 +149,6 @@ class TestCursesTUI:
         tui.select_up()
         assert tui._selected_worker == 0
 
-    def test_toggle_expand(self):
-        tui = CursesTUI(num_workers=3)
-        tui._stdscr = _mock_stdscr()
-        assert 0 not in tui._expanded_workers
-        tui.toggle_expand()
-        assert 0 in tui._expanded_workers
-        tui.toggle_expand()
-        assert 0 not in tui._expanded_workers
-
     def test_select_worker(self):
         tui = CursesTUI(num_workers=4)
         tui._stdscr = _mock_stdscr()
@@ -211,6 +202,24 @@ class TestCursesTUI:
         tui.set_worker_finished(0)
         assert tui._worker_finish_time[0] is not None
 
+    def test_set_worker_task_info(self):
+        tui = CursesTUI(num_workers=2)
+        tui._stdscr = _mock_stdscr()
+        params = {"variable": "2m_temperature", "year": "2024"}
+        tui.set_worker_task_info(
+            0, "reanalysis-era5-single-levels", params, "/data/out.grib"
+        )
+        assert tui._worker_dataset[0] == "reanalysis-era5-single-levels"
+        assert tui._worker_request_params[0] == params
+        assert tui._worker_target[0] == "/data/out.grib"
+
+    def test_set_worker_task_info_out_of_range(self):
+        tui = CursesTUI(num_workers=2)
+        tui._stdscr = _mock_stdscr()
+        tui.set_worker_task_info(5, "dataset", {})
+        # Should not raise, original state unchanged
+        assert tui._worker_dataset == ["", ""]
+
 
 class TestFormattingHelpers:
     """Tests for per-worker formatting helpers."""
@@ -242,15 +251,6 @@ class TestFormattingHelpers:
         # Should be roughly "1m00s" (not "—")
         assert result != "—"
         assert "m" in result
-
-    def test_format_finish_time_none(self):
-        tui = CursesTUI(num_workers=1)
-        assert tui._format_finish_time(0) == "—"
-
-    def test_format_finish_time_set(self):
-        tui = CursesTUI(num_workers=1)
-        tui._worker_finish_time[0] = time.mktime(time.strptime("14:22:09", "%H:%M:%S"))
-        assert tui._format_finish_time(0) == "14:22:09"
 
     def test_format_dl_size_no_total(self):
         tui = CursesTUI(num_workers=1)
@@ -304,23 +304,21 @@ class TestFormattingHelpers:
 
 
 class TestColumnSpecs:
-    def test_returns_ten_columns(self):
+    def test_returns_eight_columns(self):
         tui = CursesTUI(num_workers=1)
         cols = tui._column_specs(120)
-        assert len(cols) == 10
+        assert len(cols) == 8
 
     def test_column_labels(self):
         tui = CursesTUI(num_workers=1)
         cols = tui._column_specs(120)
         labels = [label for label, _ in cols]
         assert labels == [
-            "Worker",
+            "W",
             "Status",
             "Filename",
-            "Type",
             "Started",
             "Elapsed",
-            "Finished",
             "Size",
             "DL %",
             "Request ID",
@@ -375,20 +373,33 @@ class TestDrawing:
         _, _, hints_text, _, _ = calls[1].args
         assert "[q] quit" in hints_text
         assert "select" in hints_text
-        assert "expand" in hints_text
+        assert "logs" in hints_text
 
-    def test_draw_column_headers_at_row_1(self):
+    def test_draw_header_log_view_mode(self):
+        tui, stdscr = self._make_tui()
+        tui._view_mode = "logs"
+        tui._worker_filename[0] = "test.grib"
+        with _mock_curses():
+            tui._draw_header(120)
+        calls = stdscr.addnstr.call_args_list
+        title_text = calls[0].args[2]
+        assert "Worker 0" in title_text
+        assert "test.grib" in title_text
+
+    def test_draw_column_headers_at_correct_row(self):
         tui, stdscr = self._make_tui()
         tui._draw_column_headers(120)
         calls = stdscr.addnstr.call_args_list
         assert len(calls) == 1
         row, col, text, _, attr = calls[0].args
-        assert row == 1
+        assert row == tui.HEADER_ROWS - 1  # column headers on last header row
         assert col == 0
-        assert "Worker" in text
+        assert "W" in text
         assert "Status" in text
         assert "Filename" in text
         assert "Request ID" in text
+        assert "Type" not in text
+        assert "Finished" not in text
         assert attr & curses.A_BOLD
         assert attr & curses.A_UNDERLINE
 
@@ -470,56 +481,6 @@ class TestDrawing:
         badge_attr = badge_calls[0].args[4]
         assert badge_attr == _CP_STATUS_RUNNING << 8
 
-    def test_draw_table_expanded_shows_log_lines(self):
-        tui, stdscr = self._make_tui(num_workers=2)
-        tui.append_worker_log(0, "line A")
-        tui.append_worker_log(0, "line B")
-        tui._expanded_workers.add(0)
-        stdscr.addnstr.reset_mock()
-        tui._draw_table(120, available_height=20)
-        # Log lines should appear after worker 0's row with A_DIM
-        all_calls = stdscr.addnstr.call_args_list
-        dim_calls = [
-            c for c in all_calls if len(c.args) > 4 and c.args[4] == curses.A_DIM
-        ]
-        assert len(dim_calls) == 2  # 2 log lines
-        dim_texts = [c.args[2] for c in dim_calls]
-        assert any("line A" in t for t in dim_texts)
-        assert any("line B" in t for t in dim_texts)
-
-    def test_draw_table_expanded_max_3_log_lines(self):
-        tui, stdscr = self._make_tui(num_workers=1)
-        for i in range(10):
-            tui.append_worker_log(0, f"line {i}")
-        tui._expanded_workers.add(0)
-        stdscr.addnstr.reset_mock()
-        tui._draw_table(120, available_height=20)
-        dim_calls = [
-            c
-            for c in stdscr.addnstr.call_args_list
-            if len(c.args) > 4 and c.args[4] == curses.A_DIM
-        ]
-        # Only 3 most recent log lines shown
-        assert len(dim_calls) == 3
-        dim_texts = [c.args[2] for c in dim_calls]
-        assert any("line 7" in t for t in dim_texts)
-        assert any("line 8" in t for t in dim_texts)
-        assert any("line 9" in t for t in dim_texts)
-
-    def test_draw_table_expanded_log_lines_have_prefix(self):
-        tui, stdscr = self._make_tui(num_workers=1)
-        tui.append_worker_log(0, "test message")
-        tui._expanded_workers.add(0)
-        stdscr.addnstr.reset_mock()
-        tui._draw_table(120, available_height=20)
-        dim_calls = [
-            c
-            for c in stdscr.addnstr.call_args_list
-            if len(c.args) > 4 and c.args[4] == curses.A_DIM
-        ]
-        assert len(dim_calls) == 1
-        assert dim_calls[0].args[2].startswith("  Log: ")
-
     def test_draw_table_clears_remaining_rows(self):
         tui, stdscr = self._make_tui(num_workers=2)
         available = 10
@@ -547,18 +508,13 @@ class TestDrawing:
         texts = [c.args[2] for c in stdscr.addnstr.call_args_list if c.args[0] == row]
         assert any("af1e2306" in t for t in texts)
 
-    def test_draw_table_shows_filetype(self):
-        tui, stdscr = self._make_tui(num_workers=1)
-        tui._worker_filename[0] = "era5_data.grib"
-        tui._draw_table(120, available_height=10)
-        row = tui.HEADER_ROWS
-        texts = [c.args[2] for c in stdscr.addnstr.call_args_list if c.args[0] == row]
-        assert any("grib" in t for t in texts)
-
-    def test_draw_table_finished_column_green_background(self):
+    def test_draw_table_finished_elapsed_green(self):
+        """When a worker is finished, Elapsed and DL% columns get green background."""
         tui, stdscr = self._make_tui(num_workers=1)
         tui._worker_finish_time[0] = 1000.0  # mark as finished
         tui._worker_start_time[0] = 900.0
+        tui._worker_dl_bytes[0] = 500
+        tui._worker_dl_total[0] = 1000
         with _mock_curses():
             tui._draw_table(120, available_height=10)
         row = tui.HEADER_ROWS
@@ -567,14 +523,15 @@ class TestDrawing:
             for c in stdscr.addnstr.call_args_list
             if c.args[0] == row and len(c.args) > 4
         ]
-        # Find the call with the green success color pair (mocked as n << 8)
+        # Find calls with the green success color pair (mocked as n << 8)
         green_calls = [c for c in calls if c.args[4] == _CP_STATUS_SUCCESS << 8]
-        assert len(green_calls) >= 1
-        # The green call should contain a time string (the finished time)
-        green_text = green_calls[0].args[2]
-        assert ":" in green_text  # HH:MM:SS format
+        # Should have at least 2: one for Elapsed, one for DL%
+        assert len(green_calls) >= 2
+        green_texts = [c.args[2] for c in green_calls]
+        # One should contain elapsed time (with m/h), other should contain pct
+        assert any("%" in t for t in green_texts)
 
-    def test_draw_table_unfinished_no_green_finished(self):
+    def test_draw_table_unfinished_no_green_elapsed(self):
         tui, stdscr = self._make_tui(num_workers=1)
         # Not finished — finish_time is None
         tui._worker_start_time[0] = 900.0
@@ -595,14 +552,37 @@ class TestDrawing:
         with (
             _mock_curses(),
             patch.object(tui, "_draw_header") as dh,
+            patch.object(tui, "_draw_info_panel") as dip,
             patch.object(tui, "_draw_column_headers") as dch,
             patch.object(tui, "_draw_table") as dt,
             patch.object(tui, "_draw_progress_bar") as dpb,
         ):
             tui._do_refresh()
             dh.assert_called_once()
+            dip.assert_called_once()
             dch.assert_called_once()
             dt.assert_called_once()
+            dpb.assert_called_once()
+
+    def test_do_refresh_log_view_skips_table(self):
+        tui, stdscr = self._make_tui()
+        tui._view_mode = "logs"
+        tui._last_size = (0, 0)
+        with (
+            _mock_curses(),
+            patch.object(tui, "_draw_header") as dh,
+            patch.object(tui, "_draw_info_panel") as dip,
+            patch.object(tui, "_draw_column_headers") as dch,
+            patch.object(tui, "_draw_table") as dt,
+            patch.object(tui, "_draw_log_view") as dlv,
+            patch.object(tui, "_draw_progress_bar") as dpb,
+        ):
+            tui._do_refresh()
+            dh.assert_called_once()
+            dip.assert_not_called()
+            dch.assert_not_called()
+            dt.assert_not_called()
+            dlv.assert_called_once()
             dpb.assert_called_once()
 
     def test_do_refresh_erase_on_size_change(self):
@@ -619,6 +599,220 @@ class TestDrawing:
         with _mock_curses():
             tui._do_refresh()
         stdscr.erase.assert_not_called()
+
+
+class TestInfoPanel:
+    """Tests for the info panel drawing."""
+
+    def _make_tui(self, num_workers=3, height=30, width=120):
+        tui = CursesTUI(num_workers=num_workers)
+        stdscr = _mock_stdscr(height, width)
+        tui._stdscr = stdscr
+        tui._last_size = (height, width)
+        return tui, stdscr
+
+    def test_info_panel_shows_worker_id(self):
+        tui, stdscr = self._make_tui()
+        tui._selected_worker = 1
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 1]
+        texts = [c.args[2] for c in calls]
+        assert any("Worker 1" in t for t in texts)
+
+    def test_info_panel_shows_dataset(self):
+        tui, stdscr = self._make_tui()
+        tui._worker_dataset[0] = "reanalysis-era5-single-levels"
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        # Dataset is on row 5 (Request ID │ Dataset)
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 5]
+        texts = [c.args[2] for c in calls]
+        assert any("reanalysis-era5-single-levels" in t for t in texts)
+
+    def test_info_panel_shows_params(self):
+        tui, stdscr = self._make_tui()
+        tui._worker_request_params[0] = {"variable": "2m_temperature", "year": "2024"}
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        # Params are on rows 7-10
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] in (7, 8, 9, 10)]
+        texts = [c.args[2] for c in calls]
+        assert any("variable=2m_temperature" in t for t in texts)
+        assert any("year=2024" in t for t in texts)
+
+    def test_info_panel_shows_destination(self):
+        tui, stdscr = self._make_tui()
+        tui._worker_target[0] = "/data/downloads/era5_t2m.grib"
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        # Destination is on row 3
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 3]
+        texts = [c.args[2] for c in calls]
+        assert any("/data/downloads" in t for t in texts)
+
+    def test_info_panel_shows_filetype(self):
+        tui, stdscr = self._make_tui()
+        tui._worker_filename[0] = "era5_data.grib"
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        # Filetype (uppercase) is on row 1
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 1]
+        texts = [c.args[2] for c in calls]
+        assert any("GRIB" in t for t in texts)
+
+    def test_info_panel_updates_with_selection(self):
+        tui, stdscr = self._make_tui()
+        tui._worker_filename[0] = "file_a.grib"
+        tui._worker_filename[1] = "file_b.nc"
+        tui._selected_worker = 0
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        calls_0 = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 1]
+        texts_0 = [c.args[2] for c in calls_0]
+        assert any("file_a.grib" in t for t in texts_0)
+
+        stdscr.addnstr.reset_mock()
+        tui._selected_worker = 1
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        calls_1 = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 1]
+        texts_1 = [c.args[2] for c in calls_1]
+        assert any("file_b.nc" in t for t in texts_1)
+
+
+class TestLogView:
+    """Tests for the full-screen log view."""
+
+    def _make_tui(self, num_workers=3, height=30, width=120):
+        tui = CursesTUI(num_workers=num_workers)
+        stdscr = _mock_stdscr(height, width)
+        tui._stdscr = stdscr
+        tui._last_size = (height, width)
+        return tui, stdscr
+
+    def test_open_log_view_sets_mode(self):
+        tui, _ = self._make_tui()
+        assert tui._view_mode == "table"
+        with _mock_curses():
+            tui.open_log_view()
+        assert tui._view_mode == "logs"
+
+    def test_close_log_view_returns_to_table(self):
+        tui, _ = self._make_tui()
+        with _mock_curses():
+            tui.open_log_view()
+            tui.close_log_view()
+        assert tui._view_mode == "table"
+
+    def test_log_view_shows_log_lines(self):
+        tui, stdscr = self._make_tui()
+        tui.append_worker_log(0, "line A")
+        tui.append_worker_log(0, "line B")
+        tui.append_worker_log(0, "line C")
+        tui._view_mode = "logs"
+        tui._log_scroll = 0
+        stdscr.addnstr.reset_mock()
+        tui._draw_log_view(120, available_height=20)
+        calls = stdscr.addnstr.call_args_list
+        texts = [c.args[2] for c in calls]
+        assert any("line A" in t for t in texts)
+        assert any("line B" in t for t in texts)
+        assert any("line C" in t for t in texts)
+
+    def test_log_view_scroll(self):
+        tui, stdscr = self._make_tui()
+        for i in range(50):
+            tui.append_worker_log(0, f"line {i}")
+        tui._view_mode = "logs"
+        tui._log_scroll = 40
+        stdscr.addnstr.reset_mock()
+        tui._draw_log_view(120, available_height=5)
+        texts = [c.args[2] for c in stdscr.addnstr.call_args_list]
+        assert any("line 40" in t for t in texts)
+
+    def test_select_up_scrolls_in_log_view(self):
+        tui, _ = self._make_tui()
+        for i in range(50):
+            tui.append_worker_log(0, f"line {i}")
+        tui._view_mode = "logs"
+        tui._log_scroll = 10
+        with _mock_curses():
+            tui.select_up()
+        assert tui._log_scroll == 9
+
+    def test_select_down_scrolls_in_log_view(self):
+        tui, _ = self._make_tui()
+        for i in range(50):
+            tui.append_worker_log(0, f"line {i}")
+        tui._view_mode = "logs"
+        tui._log_scroll = 10
+        with _mock_curses():
+            tui.select_down()
+        assert tui._log_scroll == 11
+
+    def test_page_up(self):
+        tui, _ = self._make_tui()
+        for i in range(100):
+            tui.append_worker_log(0, f"line {i}")
+        tui._view_mode = "logs"
+        tui._log_scroll = 50
+        with _mock_curses():
+            tui.page_up()
+        assert tui._log_scroll < 50
+
+    def test_page_down(self):
+        tui, _ = self._make_tui()
+        for i in range(100):
+            tui.append_worker_log(0, f"line {i}")
+        tui._view_mode = "logs"
+        tui._log_scroll = 10
+        with _mock_curses():
+            tui.page_down()
+        assert tui._log_scroll > 10
+
+    def test_log_home(self):
+        tui, _ = self._make_tui()
+        for i in range(50):
+            tui.append_worker_log(0, f"line {i}")
+        tui._view_mode = "logs"
+        tui._log_scroll = 30
+        with _mock_curses():
+            tui.log_home()
+        assert tui._log_scroll == 0
+
+    def test_log_end(self):
+        tui, _ = self._make_tui()
+        for i in range(50):
+            tui.append_worker_log(0, f"line {i}")
+        tui._view_mode = "logs"
+        tui._log_scroll = 0
+        with _mock_curses():
+            tui.log_end()
+        # Scroll should jump to the end (clamped by _draw_log_view during refresh)
+        # available_height = 30 - 2 - 1 = 27, so max_scroll = 50 - 27 = 23
+        assert tui._log_scroll > 0
+
+    def test_double_click_opens_log_view(self):
+        tui, stdscr = self._make_tui(num_workers=4)
+        tui._last_size = (30, 120)
+        with _mock_curses():
+            tui._do_refresh()
+        target_row = tui.HEADER_ROWS + 2
+        with _mock_curses():
+            tui.handle_mouse((0, 10, target_row, 0, curses.BUTTON1_DOUBLE_CLICKED))
+        assert tui._selected_worker == 2
+        assert tui._view_mode == "logs"
+
+    def test_mouse_ignored_in_log_view(self):
+        tui, _ = self._make_tui()
+        tui._view_mode = "logs"
+        tui._selected_worker = 0
+        with _mock_curses():
+            tui.handle_mouse((0, 10, 5, 0, curses.BUTTON1_CLICKED))
+        # Should still be in log view, selection unchanged
+        assert tui._view_mode == "logs"
+        assert tui._selected_worker == 0
 
 
 class TestMouseHandling:
@@ -645,23 +839,6 @@ class TestMouseHandling:
         with _mock_curses():
             tui.handle_mouse((0, 10, 25, 0, curses.BUTTON1_CLICKED))
         assert tui._selected_worker == 1  # unchanged
-
-    def test_double_click_expands(self):
-        tui = self._make_tui_with_rows()
-        target_row = tui.HEADER_ROWS + 1
-        assert 1 not in tui._expanded_workers
-        with _mock_curses():
-            tui.handle_mouse((0, 10, target_row, 0, curses.BUTTON1_DOUBLE_CLICKED))
-        assert tui._selected_worker == 1
-        assert 1 in tui._expanded_workers
-
-    def test_double_click_collapses(self):
-        tui = self._make_tui_with_rows()
-        tui._expanded_workers.add(0)
-        target_row = tui.HEADER_ROWS
-        with _mock_curses():
-            tui.handle_mouse((0, 10, target_row, 0, curses.BUTTON1_DOUBLE_CLICKED))
-        assert 0 not in tui._expanded_workers
 
     def test_scroll_wheel_up(self):
         tui = self._make_tui_with_rows()
@@ -694,19 +871,19 @@ class TestMouseHandling:
 
 class TestEnsureSelectedVisible:
     def test_scroll_down_when_selected_below_view(self):
-        # Terminal with only 6 available rows (height=10, -2 header -2 progress = 6)
+        # height=20, HEADER_ROWS=12, PROGRESS_ROWS=2 → available=6
         tui = CursesTUI(num_workers=10)
-        tui._stdscr = _mock_stdscr(height=10, width=120)
+        tui._stdscr = _mock_stdscr(height=20, width=120)
         tui._table_scroll = 0
         tui._selected_worker = 8  # well below the visible 6 rows
         tui._ensure_selected_visible()
-        # scroll should have moved so worker 8 (row_idx=8) is visible
+        # scroll should have moved so worker 8 is visible
         assert tui._table_scroll > 0
         assert tui._table_scroll <= 8
 
     def test_scroll_up_when_selected_above_view(self):
         tui = CursesTUI(num_workers=10)
-        tui._stdscr = _mock_stdscr(height=10, width=120)
+        tui._stdscr = _mock_stdscr(height=20, width=120)
         tui._table_scroll = 5
         tui._selected_worker = 2  # above scroll position
         tui._ensure_selected_visible()
@@ -714,28 +891,11 @@ class TestEnsureSelectedVisible:
 
     def test_no_scroll_when_selected_visible(self):
         tui = CursesTUI(num_workers=4)
-        tui._stdscr = _mock_stdscr(height=20, width=120)
+        tui._stdscr = _mock_stdscr(height=30, width=120)
         tui._table_scroll = 0
         tui._selected_worker = 2
         tui._ensure_selected_visible()
         assert tui._table_scroll == 0
-
-    def test_scroll_accounts_for_expanded_workers(self):
-        tui = CursesTUI(num_workers=10)
-        tui._stdscr = _mock_stdscr(height=10, width=120)
-        # Expand workers 0-2, each with 3 log lines → 3*(1+3)=12 rows before worker 3
-        for wid in range(3):
-            tui._expanded_workers.add(wid)
-            for i in range(5):
-                tui._worker_logs[wid].append(f"log {i}")
-        tui._table_scroll = 0
-        tui._selected_worker = 5
-        tui._ensure_selected_visible()
-        # Worker 5 is at row_idx = 3*(1+3) + 2*1 = 14 (workers 3,4 = 2 rows)
-        # wait, let me think: workers 0,1,2 expanded with 3 log lines each = 3*(1+3) = 12
-        # worker 3 = 1 row (row_idx 12), worker 4 = 1 row (row_idx 13), worker 5 = row_idx 14
-        # available = 10 - 2 - 2 = 6, so we need scroll >= 14 - 6 + 1 = 9
-        assert tui._table_scroll > 0
 
 
 class TestTableScroll:

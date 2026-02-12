@@ -83,6 +83,9 @@ class CursesAdapter(OutputAdapter):
         self._tui.set_worker_request_id(worker_id, "")
         self._tui.clear_worker_log(worker_id)
         self._tui.set_worker_filename(worker_id, task.label)
+        self._tui.set_worker_task_info(
+            worker_id, task.dataset, task.request, task.target
+        )
         self._tui.append_worker_log(worker_id, f"Started: {task.label}")
 
     def on_task_message(self, worker_id, message):
