@@ -68,23 +68,27 @@ def main():
         download_thread.start()
 
         stdscr.timeout(200)
-        while download_thread.is_alive():
-            try:
-                key = stdscr.getch()
-            except curses.error:
-                continue
-            if key == ord("q"):
-                downloader.cancel()
-                tui.set_status_line("Cancelling...")
-                break
-            elif key == curses.KEY_RESIZE:
-                tui.handle_resize()
-            elif key == ord("\t"):
-                tui.cycle_focus()
-            elif key == curses.KEY_UP:
-                tui.scroll_log_up()
-            elif key == curses.KEY_DOWN:
-                tui.scroll_log_down()
+        try:
+            while download_thread.is_alive():
+                try:
+                    key = stdscr.getch()
+                except curses.error:
+                    continue
+                if key == ord("q"):
+                    downloader.cancel()
+                    tui.set_status_line("Cancelling...")
+                    break
+                elif key == curses.KEY_RESIZE:
+                    tui.handle_resize()
+                elif key == ord("\t"):
+                    tui.cycle_focus()
+                elif key == curses.KEY_UP:
+                    tui.scroll_log_up()
+                elif key == curses.KEY_DOWN:
+                    tui.scroll_log_down()
+        except KeyboardInterrupt:
+            downloader.cancel()
+            tui.set_status_line("Interrupted \u2014 cancelling...")
 
         download_thread.join(timeout=10)
         results = download_result[0]

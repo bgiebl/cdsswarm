@@ -87,7 +87,7 @@ class TestCursesTUI:
         stdscr = _mock_stdscr(height=5, width=20)
         tui._stdscr = stdscr
         tui._do_refresh()
-        stdscr.clear.assert_called()
+        stdscr.erase.assert_called()
         stdscr.addstr.assert_called()
 
     def test_cycle_focus(self):

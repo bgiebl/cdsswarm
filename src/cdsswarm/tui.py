@@ -1,6 +1,7 @@
 """Curses-based TUI for displaying concurrent download worker status."""
 
 import curses
+import shutil
 import threading
 import time
 from collections import deque
@@ -65,6 +66,7 @@ class CursesTUI:
         self._eta_start_time = None
         self._focused_worker: int | None = None
         self._scroll_offset = [0] * num_workers
+        self._last_size: tuple[int, int] = (0, 0)
 
     def start(self, stdscr):
         self._stdscr = stdscr
@@ -243,8 +245,9 @@ class CursesTUI:
     def handle_resize(self):
         with self._lock:
             if self._stdscr:
-                curses.resizeterm(*self._stdscr.getmaxyx())
-                self._stdscr.clear()
+                # Get actual terminal size from OS (not curses' stale cache)
+                size = shutil.get_terminal_size()
+                curses.resizeterm(size.lines, size.columns)
                 self._do_refresh()
 
     def cycle_focus(self):
@@ -255,6 +258,8 @@ class CursesTUI:
                 self._focused_worker = None
             else:
                 self._focused_worker += 1
+            # Panel layout changed — force full erase on next draw
+            self._last_size = (0, 0)
             self._do_refresh()
 
     def scroll_log_up(self):
@@ -332,11 +337,24 @@ class CursesTUI:
             return
         try:
             height, width = self._stdscr.getmaxyx()
+            cur_size = (height, width)
+
             if height < self.MIN_HEIGHT or width < self.MIN_WIDTH:
-                self._stdscr.clear()
+                self._stdscr.erase()
                 self._stdscr.addstr(0, 0, f"Terminal too small ({width}x{height})")
-                self._stdscr.refresh()
+                self._stdscr.noutrefresh()
+                curses.doupdate()
+                self._last_size = cur_size
                 return
+
+            # Only erase the whole screen when the geometry changed
+            # (resize, focus toggle).  Normal content updates use
+            # per-row clrtoeol() in the draw methods, which avoids
+            # any visible flicker.
+            if cur_size != self._last_size:
+                self._stdscr.erase()
+                self._last_size = cur_size
+
             self._draw_header(width)
             panels, w = self._panel_geometry()
             for wid in range(self._num_workers):
@@ -344,6 +362,7 @@ class CursesTUI:
                 if h > 0:
                     self._draw_worker_panel(wid, start, h, w)
             self._draw_progress_bar(height, w)
-            self._stdscr.refresh()
+            self._stdscr.noutrefresh()
+            curses.doupdate()
         except curses.error:
             pass

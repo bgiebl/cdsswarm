@@ -81,10 +81,21 @@ class SwarmDownloader:
         self._skip_existing = skip_existing
         self._reuse_jobs = reuse_jobs
         self._cancel_event = threading.Event()
+        self._state: _WorkerState | None = None
+        self._pool: ThreadPoolExecutor | None = None
 
     def cancel(self):
-        """Signal the downloader to cancel all in-flight requests."""
+        """Cancel all in-flight CDS requests and shut down the pool.
+
+        Safe to call from any thread (e.g. the main/UI thread while
+        ``run()`` executes in a background thread).
+        """
         self._cancel_event.set()
+        # Cancel active CDS requests immediately via the API
+        if self._state is not None:
+            self._cancel_active(self._state)
+        if self._pool is not None:
+            self._pool.shutdown(wait=False, cancel_futures=True)
 
     def run(self) -> list[Result] | None:
         """Execute all downloads. Returns list of Results, or None if interrupted."""
@@ -124,7 +135,7 @@ class SwarmDownloader:
                         f"Found {len(reuse_map)} reusable job(s)"
                     )
 
-        state = _WorkerState()
+        self._state = state = _WorkerState()
         results: list[Result] = []
         # Pre-populate results for skipped tasks
         if self._skip_existing:
@@ -136,7 +147,7 @@ class SwarmDownloader:
         router_state = install_progress_router(
             self._adapter, state.worker_id_map, state.lock,
         )
-        pool = ThreadPoolExecutor(max_workers=self._num_workers)
+        self._pool = pool = ThreadPoolExecutor(max_workers=self._num_workers)
         futures = {
             pool.submit(
                 self._download_one, task, state, reuse_map.get(task.target),
@@ -147,6 +158,9 @@ class SwarmDownloader:
         try:
             for future in as_completed(futures):
                 if self._cancel_event.is_set():
+                    # cancel() may already have done shutdown + API cancel;
+                    # call again is safe (shutdown is idempotent, _cancel_active
+                    # skips already-removed requests).
                     pool.shutdown(wait=False, cancel_futures=True)
                     self._cancel_active(state)
                     return None
@@ -170,6 +184,8 @@ class SwarmDownloader:
         else:
             pool.shutdown(wait=True)
         finally:
+            self._pool = None
+            self._state = None
             uninstall_progress_router(router_state)
 
         all_ok = all(r.success for r in results)
