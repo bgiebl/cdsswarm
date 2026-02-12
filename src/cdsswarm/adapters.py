@@ -35,6 +35,9 @@ class OutputAdapter(ABC):
     def on_task_request_id(self, worker_id: int, request_id: str):
         pass
 
+    def on_task_progress(self, worker_id: int, downloaded_bytes: int, total_bytes: int):
+        pass
+
     def on_task_cancelled(self, worker_id: int):
         pass
 
@@ -79,6 +82,7 @@ class CursesAdapter(OutputAdapter):
         self._tui.set_worker_cds_status(worker_id, "accepted")
         self._tui.set_worker_request_id(worker_id, "")
         self._tui.clear_worker_log(worker_id)
+        self._tui.set_worker_filename(worker_id, task.label)
         self._tui.append_worker_log(worker_id, f"Started: {task.label}")
 
     def on_task_message(self, worker_id, message):
@@ -94,12 +98,16 @@ class CursesAdapter(OutputAdapter):
         else:
             self._tui.set_worker_cds_status(worker_id, "failed")
             self._tui.append_worker_log(worker_id, f"Error: {error}")
+        self._tui.set_worker_finished(worker_id)
 
     def on_progress_update(self, completed, total, skipped):
         self._tui.update_progress(completed, total, skipped)
 
     def on_task_request_id(self, worker_id, request_id):
         self._tui.set_worker_request_id(worker_id, request_id)
+
+    def on_task_progress(self, worker_id, downloaded_bytes, total_bytes):
+        self._tui.update_worker_progress(worker_id, downloaded_bytes, total_bytes)
 
     def on_task_cancelled(self, worker_id):
         self._tui.set_worker_cds_status(worker_id, "cancelled")

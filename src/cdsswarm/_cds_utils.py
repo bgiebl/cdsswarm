@@ -227,6 +227,7 @@ def install_progress_router(adapter, worker_id_map, id_lock):
             adapter.on_task_message(
                 wid, f"Downloading: {done_mb:.0f}/{total_mb:.0f} MB ({pct}%)"
             )
+            adapter.on_task_progress(wid, self.n, self.total)
 
     patched = []
     for mod_name, mod in list(sys.modules.items()):
