@@ -24,9 +24,11 @@ class TestPublicAPI:
         """download() returns a list of Results."""
         with tempfile.TemporaryDirectory() as tmp:
             mock_client = MagicMock()
+
             def fake_retrieve(dataset, request, target):
                 with open(target, "w") as f:
                     f.write("data")
+
             mock_client.retrieve.side_effect = fake_retrieve
             mock_cdsapi.Client.return_value = mock_client
 
@@ -44,9 +46,11 @@ class TestPublicAPI:
         """download() routes messages through on_message callback."""
         with tempfile.TemporaryDirectory() as tmp:
             mock_client = MagicMock()
+
             def fake_retrieve(dataset, request, target):
                 with open(target, "w") as f:
                     f.write("data")
+
             mock_client.retrieve.side_effect = fake_retrieve
             mock_cdsapi.Client.return_value = mock_client
 

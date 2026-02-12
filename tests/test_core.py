@@ -2,7 +2,7 @@
 
 import os
 import tempfile
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -58,10 +58,12 @@ class TestSwarmDownloader:
     def test_successful_download(self, mock_cdsapi, tmp_dir):
         """All tasks succeed when cdsapi.Client.retrieve works."""
         mock_client = MagicMock()
+
         # Simulate retrieve by creating the target file
         def fake_retrieve(dataset, request, target):
             with open(target, "w") as f:
                 f.write("data")
+
         mock_client.retrieve.side_effect = fake_retrieve
         mock_cdsapi.Client.return_value = mock_client
 
@@ -100,9 +102,11 @@ class TestSwarmDownloader:
             f.write("cached")
 
         mock_client = MagicMock()
+
         def fake_retrieve(dataset, request, target):
             with open(target, "w") as f:
                 f.write("data")
+
         mock_client.retrieve.side_effect = fake_retrieve
         mock_cdsapi.Client.return_value = mock_client
 
@@ -124,9 +128,11 @@ class TestSwarmDownloader:
             f.write("old")
 
         mock_client = MagicMock()
+
         def fake_retrieve(dataset, request, target):
             with open(target, "w") as f:
                 f.write("new")
+
         mock_client.retrieve.side_effect = fake_retrieve
         mock_cdsapi.Client.return_value = mock_client
 
@@ -161,12 +167,14 @@ class TestSwarmDownloader:
 
         mock_client = MagicMock()
         call_count = [0]
+
         def fake_retrieve(dataset, request, target):
             call_count[0] += 1
             if "var_1" in request.get("variable", []):
                 raise RuntimeError("var_1 failed")
             with open(target, "w") as f:
                 f.write("data")
+
         mock_client.retrieve.side_effect = fake_retrieve
         mock_cdsapi.Client.return_value = mock_client
 
@@ -212,7 +220,9 @@ class TestSwarmDownloader:
 
     @patch("cdsswarm.core.find_reusable_jobs")
     @patch("cdsswarm.core.cdsapi")
-    def test_non_matching_tasks_still_call_retrieve(self, mock_cdsapi, mock_find, tmp_dir):
+    def test_non_matching_tasks_still_call_retrieve(
+        self, mock_cdsapi, mock_find, tmp_dir
+    ):
         """Tasks without a reuse match use normal retrieve()."""
         tasks = _make_tasks(tmp_dir, count=2)
 
@@ -226,9 +236,11 @@ class TestSwarmDownloader:
 
         mock_client = MagicMock()
         mock_client.client = mock_inner
+
         def fake_retrieve(dataset, request, target):
             with open(target, "w") as f:
                 f.write("data")
+
         mock_client.retrieve.side_effect = fake_retrieve
         mock_cdsapi.Client.return_value = mock_client
 
@@ -250,9 +262,11 @@ class TestSwarmDownloader:
         mock_find.side_effect = RuntimeError("API unavailable")
 
         mock_client = MagicMock()
+
         def fake_retrieve(dataset, request, target):
             with open(target, "w") as f:
                 f.write("data")
+
         mock_client.retrieve.side_effect = fake_retrieve
         mock_cdsapi.Client.return_value = mock_client
 
@@ -271,9 +285,11 @@ class TestSwarmDownloader:
     def test_reuse_disabled_skips_lookup(self, mock_cdsapi, mock_find, tmp_dir):
         """reuse_jobs=False skips the lookup entirely."""
         mock_client = MagicMock()
+
         def fake_retrieve(dataset, request, target):
             with open(target, "w") as f:
                 f.write("data")
+
         mock_client.retrieve.side_effect = fake_retrieve
         mock_cdsapi.Client.return_value = mock_client
 

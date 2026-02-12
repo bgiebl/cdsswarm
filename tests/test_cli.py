@@ -112,9 +112,17 @@ class TestCLIParsing:
         from cdsswarm.cli import _build_parser
 
         parser = _build_parser()
-        args = parser.parse_args([
-            "my_requests.yaml", "-w", "8", "-m", "script", "--no-skip", "--dry-run",
-        ])
+        args = parser.parse_args(
+            [
+                "my_requests.yaml",
+                "-w",
+                "8",
+                "-m",
+                "script",
+                "--no-skip",
+                "--dry-run",
+            ]
+        )
         assert args.requests_file == "my_requests.yaml"
         assert args.workers == 8
         assert args.mode == "script"

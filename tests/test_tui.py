@@ -2,7 +2,6 @@
 
 from unittest.mock import MagicMock
 
-import pytest
 
 from cdsswarm.tui import CursesTUI, _format_eta
 

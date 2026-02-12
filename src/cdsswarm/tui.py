@@ -87,7 +87,9 @@ class CursesTUI:
         if curses.COLORS >= 256:
             curses.init_pair(_CP_STATUS_ACCEPTED, curses.COLOR_BLACK, 208)
         else:
-            curses.init_pair(_CP_STATUS_ACCEPTED, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+            curses.init_pair(
+                _CP_STATUS_ACCEPTED, curses.COLOR_BLACK, curses.COLOR_YELLOW
+            )
         curses.init_pair(_CP_STATUS_SUCCESS, curses.COLOR_BLACK, curses.COLOR_GREEN)
         curses.init_pair(_CP_WORKER_LABEL, curses.COLOR_WHITE, curses.COLOR_CYAN)
         curses.init_pair(_CP_STATUS_CANCELLED, curses.COLOR_WHITE, curses.COLOR_MAGENTA)
@@ -124,13 +126,15 @@ class CursesTUI:
         title = f" {self._title}"
         # Fill entire header row with the header color
         header_text = title.ljust(width - 1)
-        scr.addnstr(0, 0, header_text, width - 1,
-                     curses.color_pair(_CP_HEADER) | curses.A_BOLD)
+        scr.addnstr(
+            0, 0, header_text, width - 1, curses.color_pair(_CP_HEADER) | curses.A_BOLD
+        )
         # Right-align the hints
         hint_col = width - len(hints) - 2
         if hint_col > len(title):
-            scr.addnstr(0, hint_col, hints, width - hint_col - 1,
-                         curses.color_pair(_CP_HEADER))
+            scr.addnstr(
+                0, hint_col, hints, width - hint_col - 1, curses.color_pair(_CP_HEADER)
+            )
 
     def _draw_worker_panel(self, worker_id, start_row, height, width):
         if height <= 0:
@@ -148,8 +152,13 @@ class CursesTUI:
         request_id = self._worker_request_id[worker_id]
 
         col = 0
-        scr.addnstr(header_row, col, label, width - col - 1,
-                     curses.color_pair(_CP_WORKER_LABEL) | curses.A_BOLD)
+        scr.addnstr(
+            header_row,
+            col,
+            label,
+            width - col - 1,
+            curses.color_pair(_CP_WORKER_LABEL) | curses.A_BOLD,
+        )
         col += len(label)
 
         if cds_status and col + 14 < width:
@@ -159,15 +168,25 @@ class CursesTUI:
 
             status_label = " Status: "
             if col + len(status_label) < width:
-                scr.addnstr(header_row, col, status_label, width - col - 1,
-                            curses.color_pair(_CP_STATUS_LABEL))
+                scr.addnstr(
+                    header_row,
+                    col,
+                    status_label,
+                    width - col - 1,
+                    curses.color_pair(_CP_STATUS_LABEL),
+                )
                 col += len(status_label)
 
             status_text = f" {cds_status} "
             color_pair = self._STATUS_COLORS.get(cds_status, _CP_STATUS_LABEL)
             if col + len(status_text) < width:
-                scr.addnstr(header_row, col, status_text, width - col - 1,
-                            curses.color_pair(color_pair))
+                scr.addnstr(
+                    header_row,
+                    col,
+                    status_text,
+                    width - col - 1,
+                    curses.color_pair(color_pair),
+                )
                 col += len(status_text)
 
             if request_id and col + 2 < width:
@@ -183,7 +202,7 @@ class CursesTUI:
         log = list(self._worker_logs[worker_id])
         offset = self._scroll_offset[worker_id]
         if offset > 0 and offset < len(log):
-            visible_log = log[:len(log) - offset]
+            visible_log = log[: len(log) - offset]
         else:
             visible_log = log
         visible = visible_log[-interior_h:]
@@ -193,7 +212,7 @@ class CursesTUI:
             scr.move(row, 0)
             scr.clrtoeol()
             if i < len(visible):
-                scr.addnstr(row, 1, visible[i][:width - 2], width - 2)
+                scr.addnstr(row, 1, visible[i][: width - 2], width - 2)
 
         border_row = start_row + height - 1
         scr.move(border_row, 0)
@@ -238,7 +257,7 @@ class CursesTUI:
         scr.move(status_row, 0)
         scr.clrtoeol()
         if self._status_line:
-            scr.addnstr(status_row, 0, " " + self._status_line[:width - 2], width - 1)
+            scr.addnstr(status_row, 0, " " + self._status_line[: width - 2], width - 1)
 
     # -- Input handling methods (called from main thread) --
 
@@ -268,7 +287,8 @@ class CursesTUI:
                 wid = self._focused_worker
                 max_offset = max(0, len(self._worker_logs[wid]) - 1)
                 self._scroll_offset[wid] = min(
-                    self._scroll_offset[wid] + 3, max_offset,
+                    self._scroll_offset[wid] + 3,
+                    max_offset,
                 )
                 self._do_refresh()
 

@@ -30,6 +30,7 @@ class Task:
         request: Request parameters dict, same format as cdsapi.Client.retrieve().
         target: Local file path to save the downloaded data to.
     """
+
     dataset: str
     request: dict
     target: str
@@ -42,6 +43,7 @@ class Task:
 @dataclass
 class Result:
     """Outcome of a single download task."""
+
     task: Task
     success: bool
     error: str = ""
@@ -50,6 +52,7 @@ class Result:
 @dataclass
 class _WorkerState:
     """Mutable state shared between the download executor and callbacks."""
+
     worker_id_map: dict = field(default_factory=dict)
     task_worker_map: dict = field(default_factory=dict)
     active_requests: dict = field(default_factory=dict)
@@ -145,12 +148,17 @@ class SwarmDownloader:
 
         completed = 0
         router_state = install_progress_router(
-            self._adapter, state.worker_id_map, state.lock,
+            self._adapter,
+            state.worker_id_map,
+            state.lock,
         )
         self._pool = pool = ThreadPoolExecutor(max_workers=self._num_workers)
         futures = {
             pool.submit(
-                self._download_one, task, state, reuse_map.get(task.target),
+                self._download_one,
+                task,
+                state,
+                reuse_map.get(task.target),
             ): task
             for task in pending
         }
@@ -197,7 +205,10 @@ class SwarmDownloader:
         return results
 
     def _download_one(
-        self, task: Task, state: _WorkerState, reuse_id: str | None = None,
+        self,
+        task: Task,
+        state: _WorkerState,
+        reuse_id: str | None = None,
     ):
         """Download a single task. Runs in a worker thread."""
         wid = self._get_worker_id(state)
@@ -239,9 +250,7 @@ class SwarmDownloader:
         os.makedirs(os.path.dirname(os.path.abspath(task.target)), exist_ok=True)
         try:
             if reuse_id is not None:
-                self._adapter.on_task_message(
-                    wid, f"Reusing existing job {reuse_id}"
-                )
+                self._adapter.on_task_message(wid, f"Reusing existing job {reuse_id}")
                 inner = getattr(client, "client", None)
                 if inner is not None:
                     remote = inner.get_remote(reuse_id)

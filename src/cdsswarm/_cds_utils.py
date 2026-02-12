@@ -102,7 +102,9 @@ def _scan_jobs(inner, status, limit, needed_datasets, needed, reuse_map):
     """Scan one page of jobs for the given status and populate reuse_map."""
     try:
         jobs_response = inner.get_jobs(
-            status=status, sortby="-created", limit=limit,
+            status=status,
+            sortby="-created",
+            limit=limit,
         )
     except Exception:
         return
@@ -182,7 +184,9 @@ def cancel_cds_request(client, request_id: str):
     else:
         task_url = f"{client.url}/tasks/{request_id}"
         resp = client.session.delete(
-            task_url, verify=client.verify, timeout=10,
+            task_url,
+            verify=client.verify,
+            timeout=10,
         )
         resp.raise_for_status()
 

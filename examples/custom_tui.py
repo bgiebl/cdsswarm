@@ -20,26 +20,28 @@ from cdsswarm.tui import CursesTUI
 NUM_WORKERS = 4
 OUTPUT_DIR = "output"
 AREA = [55, 5, 47, 16]  # Germany bbox: [N, W, S, E]
-MONTHS = range(1, 7)     # Jan-Jun
+MONTHS = range(1, 7)  # Jan-Jun
 
 
 def build_tasks():
     tasks = []
     for month in MONTHS:
-        tasks.append(Task(
-            dataset="reanalysis-era5-single-levels",
-            request={
-                "product_type": ["reanalysis"],
-                "variable": ["2m_temperature"],
-                "year": ["2024"],
-                "month": [f"{month:02d}"],
-                "day": [f"{d:02d}" for d in range(1, 32)],
-                "time": ["12:00"],
-                "area": AREA,
-                "data_format": "grib",
-            },
-            target=os.path.join(OUTPUT_DIR, f"t2m_2024_{month:02d}.grib"),
-        ))
+        tasks.append(
+            Task(
+                dataset="reanalysis-era5-single-levels",
+                request={
+                    "product_type": ["reanalysis"],
+                    "variable": ["2m_temperature"],
+                    "year": ["2024"],
+                    "month": [f"{month:02d}"],
+                    "day": [f"{d:02d}" for d in range(1, 32)],
+                    "time": ["12:00"],
+                    "area": AREA,
+                    "data_format": "grib",
+                },
+                target=os.path.join(OUTPUT_DIR, f"t2m_2024_{month:02d}.grib"),
+            )
+        )
     return tasks
 
 
@@ -63,7 +65,9 @@ def main():
         )
 
         download_thread = threading.Thread(
-            target=_run_download, args=(downloader,), daemon=True,
+            target=_run_download,
+            args=(downloader,),
+            daemon=True,
         )
         download_thread.start()
 

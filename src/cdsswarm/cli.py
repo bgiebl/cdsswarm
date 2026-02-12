@@ -85,7 +85,10 @@ def _resolve_mode(mode: str) -> str:
 
 
 def _run_interactive(
-    tasks: list[Task], num_workers: int, skip_existing: bool, reuse_jobs: bool = True,
+    tasks: list[Task],
+    num_workers: int,
+    skip_existing: bool,
+    reuse_jobs: bool = True,
 ):
     """Launch curses TUI and run downloads inside it."""
     tui = CursesTUI(num_workers=num_workers)
@@ -104,7 +107,10 @@ def _run_interactive(
         )
 
         import threading as _thr
-        download_thread = _thr.Thread(target=_run_download, args=(downloader,), daemon=True)
+
+        download_thread = _thr.Thread(
+            target=_run_download, args=(downloader,), daemon=True
+        )
         download_thread.start()
 
         # Input loop: poll at 200ms intervals
@@ -156,7 +162,10 @@ def _run_interactive(
 
 
 def _run_script(
-    tasks: list[Task], num_workers: int, skip_existing: bool, reuse_jobs: bool = True,
+    tasks: list[Task],
+    num_workers: int,
+    skip_existing: bool,
+    reuse_jobs: bool = True,
 ):
     """Run downloads with plain text output."""
     adapter = PlainTextAdapter()
@@ -187,13 +196,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="JSON or YAML file with download requests",
     )
     parser.add_argument(
-        "-w", "--workers",
+        "-w",
+        "--workers",
         type=int,
         default=4,
         help="Number of parallel download workers (default: 4)",
     )
     parser.add_argument(
-        "-m", "--mode",
+        "-m",
+        "--mode",
         choices=["interactive", "script", "auto"],
         default="auto",
         help="Display mode (default: auto)",

@@ -51,7 +51,10 @@ class TestNormalizeRequest:
 
     def test_already_normalized(self):
         inp = {"variable": ["2m_temperature"], "year": ["2024"]}
-        assert normalize_request(inp) == {"variable": ["2m_temperature"], "year": ["2024"]}
+        assert normalize_request(inp) == {
+            "variable": ["2m_temperature"],
+            "year": ["2024"],
+        }
 
     def test_empty_dict(self):
         assert normalize_request({}) == {}
@@ -125,11 +128,14 @@ class TestCancelCdsRequest:
         ecmwf_ds.config = ecmwf_config
         ecmwf_mod = MagicMock()
         ecmwf_mod.datastores = ecmwf_ds
-        with patch.dict(sys.modules, {
-            "ecmwf": ecmwf_mod,
-            "ecmwf.datastores": ecmwf_ds,
-            "ecmwf.datastores.config": ecmwf_config,
-        }):
+        with patch.dict(
+            sys.modules,
+            {
+                "ecmwf": ecmwf_mod,
+                "ecmwf.datastores": ecmwf_ds,
+                "ecmwf.datastores.config": ecmwf_config,
+            },
+        ):
             cancel_cds_request(client, "job-456")
 
         mock_session.post.assert_called_once()
@@ -174,14 +180,17 @@ class TestInstallProgressRouter:
     def test_tqdm_not_importable(self):
         """Returns empty dict when tqdm is not available."""
         import sys
+
         tqdm_mod = sys.modules.get("tqdm")
         try:
             sys.modules["tqdm"] = None  # type: ignore
             # Re-import to test the ImportError path
-            from importlib import reload
             import cdsswarm._cds_utils as utils_mod
             import threading
-            result = utils_mod.install_progress_router(MagicMock(), {}, threading.Lock())
+
+            result = utils_mod.install_progress_router(
+                MagicMock(), {}, threading.Lock()
+            )
             assert result == {}
         finally:
             if tqdm_mod is not None:
