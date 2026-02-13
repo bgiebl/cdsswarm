@@ -130,6 +130,7 @@ class CursesTUI:
         self._checksum_dialog_expected: str = ""
         self._checksum_dialog_result: str | None = None  # "continue" or "retry"
         self._checksum_dialog_event: threading.Event = threading.Event()
+        self._checksum_dialog_selected: int = 1  # 0=continue, 1=retry (default)
 
         # Log/params view state
         self._view_mode: str = "table"  # "table", "logs", "params", or "checksum"
@@ -176,7 +177,7 @@ class CursesTUI:
         scr.move(0, 0)
         scr.clrtoeol()
         if self._view_mode == "checksum":
-            hints = "[c] continue  [r] retry"
+            hints = "[↑/↓] select  [Enter] confirm  [c] continue  [r] retry"
             title = " Checksum Verification"
         elif self._view_mode == "logs":
             wid = self._selected_worker
@@ -550,11 +551,14 @@ class CursesTUI:
             scr.clrtoeol()
 
     def _draw_checksum_dialog(self, height, width):
-        """Draw the fullscreen checksum mismatch dialog."""
+        """Draw the fullscreen checksum mismatch dialog with title header."""
         scr = self._stdscr
         wid = self._checksum_dialog_worker
         if wid is None:
             return
+
+        # Draw the title bar (row 0)
+        self._draw_header(width)
 
         fname = self._worker_filename[wid] or "—"
         expected = self._checksum_dialog_expected
@@ -571,12 +575,14 @@ class CursesTUI:
         # Dialog dimensions
         dialog_w = min(60, width - 4)
         dialog_h = 10
-        start_y = max(0, (height - dialog_h) // 2)
+        # Center vertically in the area below the title bar
+        content_height = height - 1  # exclude title row
+        start_y = max(1, 1 + (content_height - dialog_h) // 2)
         start_x = max(0, (width - dialog_w) // 2)
         inner_w = dialog_w - 2
 
-        # Clear screen
-        for row in range(height):
+        # Clear screen below title bar
+        for row in range(1, height):
             scr.move(row, 0)
             scr.clrtoeol()
 
@@ -589,6 +595,8 @@ class CursesTUI:
             line = "│" + padded + "│"
             scr.addnstr(row, start_x, line[:dialog_w], dialog_w, attr)
 
+        sel = self._checksum_dialog_selected
+
         _hline(start_y, "┌", "┐")
         _content(
             start_y + 1,
@@ -600,8 +608,21 @@ class CursesTUI:
         _content(start_y + 4, f"  Expected: {expected}")
         _content(start_y + 5, f"  Got:      {actual}")
         _content(start_y + 6, "")
-        _content(start_y + 7, "  [c] Continue and ignore")
-        _content(start_y + 8, "  [r] Retry download (Recommended)", curses.A_BOLD)
+
+        # Option 0: Continue
+        opt0_row = start_y + 7
+        opt0_marker = "▸ " if sel == 0 else "  "
+        opt0_attr = curses.A_REVERSE if sel == 0 else 0
+        _content(opt0_row, f"  {opt0_marker}[c] Continue and ignore", opt0_attr)
+
+        # Option 1: Retry (recommended)
+        opt1_row = start_y + 8
+        opt1_marker = "▸ " if sel == 1 else "  "
+        opt1_attr = curses.A_REVERSE | curses.A_BOLD if sel == 1 else curses.A_BOLD
+        _content(
+            opt1_row, f"  {opt1_marker}[r] Retry download (Recommended)", opt1_attr
+        )
+
         _hline(start_y + 9, "└", "┘")
 
     def _draw_progress_bar(self, height, width):
@@ -980,6 +1001,7 @@ class CursesTUI:
             self._checksum_dialog_worker = worker_id
             self._checksum_dialog_expected = expected
             self._checksum_dialog_result = None
+            self._checksum_dialog_selected = 1  # default to "retry"
             self._checksum_dialog_event.clear()
             self._view_mode = "checksum"
             self._do_refresh()
@@ -1000,6 +1022,22 @@ class CursesTUI:
                 return True
             elif key == ord("r"):
                 self._checksum_dialog_result = "retry"
+                self._view_mode = "table"
+                self._checksum_dialog_event.set()
+                self._do_refresh()
+                return True
+            elif key == curses.KEY_UP:
+                self._checksum_dialog_selected = 0
+                self._do_refresh()
+                return True
+            elif key == curses.KEY_DOWN:
+                self._checksum_dialog_selected = 1
+                self._do_refresh()
+                return True
+            elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
+                self._checksum_dialog_result = (
+                    "continue" if self._checksum_dialog_selected == 0 else "retry"
+                )
                 self._view_mode = "table"
                 self._checksum_dialog_event.set()
                 self._do_refresh()

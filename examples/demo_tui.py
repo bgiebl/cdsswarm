@@ -186,6 +186,8 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
 
     active = {}  # worker_id -> state dict
     task_idx = 0
+    start_time = time.monotonic()
+    checksum_fail_triggered = False
 
     def _assign(wid):
         nonlocal task_idx
@@ -292,17 +294,37 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
                 )
 
                 if state["dl_bytes"] >= state["size"]:
-                    # Download finished — small chance of failure
+                    elapsed_min = (time.monotonic() - start_time) / 60.0
+
+                    # Guaranteed checksum fail after 3 minutes
+                    if not checksum_fail_triggered and elapsed_min >= 3.0:
+                        checksum_fail_triggered = True
+                        tui.set_worker_checksum_result(wid, False)
+                        tui.append_worker_log(wid, "Checksum mismatch!")
+                        tui.append_worker_log(
+                            wid, "Expected: d41d8cd98f00b204e9800998ecf8427e"
+                        )
+                        tui.set_worker_finished(wid)
+                        tasks_done += 1
+                        tui.update_progress(tasks_done, num_tasks, 0)
+                        state["phase"] = 4
+                        state["phase_ticks"] = 0
+                        # Open fullscreen dialog (blocks until user presses c/r)
+                        result = tui.show_checksum_dialog(
+                            wid, "d41d8cd98f00b204e9800998ecf8427e"
+                        )
+                        if result == "retry":
+                            tui.append_worker_log(wid, "Retrying download...")
+                        else:
+                            tui.append_worker_log(wid, "Continuing despite mismatch")
+                        continue
+
+                    # Normal completion
                     if random.random() < 0.1:
                         tui.set_worker_cds_status(wid, "failed")
                         tui.append_worker_log(wid, "Error: connection timeout")
                     else:
-                        # Simulate checksum pass (occasional fail)
-                        if random.random() < 0.05:
-                            tui.set_worker_checksum_result(wid, False)
-                            tui.append_worker_log(wid, "Checksum mismatch!")
-                        else:
-                            tui.set_worker_checksum_result(wid, True)
+                        tui.set_worker_checksum_result(wid, True)
                         tui.append_worker_log(wid, f"Completed: {state['fname']}")
                     tui.set_worker_finished(wid)
                     tasks_done += 1
