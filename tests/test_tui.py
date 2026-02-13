@@ -112,7 +112,7 @@ class TestCursesTUI:
         tui = CursesTUI(num_workers=2)
         stdscr = _mock_stdscr(height=5, width=20)
         tui._stdscr = stdscr
-        tui._do_refresh()
+        tui._render()
         stdscr.erase.assert_called()
         stdscr.addstr.assert_called()
 
@@ -566,7 +566,7 @@ class TestDrawing:
         green_calls = [c for c in calls if c.args[4] == _CP_GREEN_TEXT << 8]
         assert len(green_calls) == 0
 
-    def test_do_refresh_calls_all_draw_methods(self):
+    def test_render_calls_all_draw_methods(self):
         tui, stdscr = self._make_tui()
         tui._last_size = (0, 0)  # force full redraw
         with (
@@ -577,14 +577,14 @@ class TestDrawing:
             patch.object(tui, "_draw_table") as dt,
             patch.object(tui, "_draw_progress_bar") as dpb,
         ):
-            tui._do_refresh()
+            tui._render()
             dh.assert_called_once()
             dip.assert_called_once()
             dch.assert_called_once()
             dt.assert_called_once()
             dpb.assert_called_once()
 
-    def test_do_refresh_log_view_skips_table(self):
+    def test_render_log_view_skips_table(self):
         tui, stdscr = self._make_tui()
         tui._view_mode = "logs"
         tui._last_size = (0, 0)
@@ -597,7 +597,7 @@ class TestDrawing:
             patch.object(tui, "_draw_log_view") as dlv,
             patch.object(tui, "_draw_progress_bar") as dpb,
         ):
-            tui._do_refresh()
+            tui._render()
             dh.assert_called_once()
             dip.assert_not_called()
             dch.assert_not_called()
@@ -605,19 +605,19 @@ class TestDrawing:
             dlv.assert_called_once()
             dpb.assert_called_once()
 
-    def test_do_refresh_erase_on_size_change(self):
+    def test_render_erase_on_size_change(self):
         tui, stdscr = self._make_tui()
         tui._last_size = (20, 80)  # different from current 30x120
         with _mock_curses():
-            tui._do_refresh()
+            tui._render()
         stdscr.erase.assert_called()
 
-    def test_do_refresh_no_erase_on_same_size(self):
+    def test_render_no_erase_on_same_size(self):
         tui, stdscr = self._make_tui(height=30, width=120)
         tui._last_size = (30, 120)
         stdscr.erase.reset_mock()
         with _mock_curses():
-            tui._do_refresh()
+            tui._render()
         stdscr.erase.assert_not_called()
 
 
@@ -821,7 +821,7 @@ class TestLogView:
         tui, stdscr = self._make_tui(num_workers=4)
         tui._last_size = (30, 120)
         with _mock_curses():
-            tui._do_refresh()
+            tui._render()  # populates _row_worker_map
         target_row = tui.HEADER_ROWS + 2
         with _mock_curses():
             tui.handle_mouse((0, 10, target_row, 0, curses.BUTTON1_DOUBLE_CLICKED))
@@ -846,7 +846,7 @@ class TestMouseHandling:
         tui._stdscr = _mock_stdscr(height=30, width=120)
         tui._last_size = (30, 120)
         with _mock_curses():
-            tui._do_refresh()  # populates _row_worker_map
+            tui._render()  # populates _row_worker_map
         return tui
 
     def test_click_selects_worker(self):
@@ -1230,7 +1230,7 @@ class TestChecksumDialog:
         assert result is False
         assert tui._view_mode == "checksum"
 
-    def test_do_refresh_checksum_view(self):
+    def test_render_checksum_view(self):
         tui, stdscr = self._make_tui()
         tui._view_mode = "checksum"
         tui._checksum_dialog_worker = 0
@@ -1241,5 +1241,5 @@ class TestChecksumDialog:
             _mock_curses(),
             patch.object(tui, "_draw_checksum_dialog") as dcd,
         ):
-            tui._do_refresh()
+            tui._render()
             dcd.assert_called_once()

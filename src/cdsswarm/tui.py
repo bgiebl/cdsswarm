@@ -1084,9 +1084,13 @@ class CursesTUI:
 
     def refresh(self):
         with self._lock:
-            self._do_refresh()
+            self._render()
 
     def _do_refresh(self):
+        """No-op: state-only setters call this; actual drawing happens in refresh()."""
+        pass
+
+    def _render(self):
         if not self._stdscr:
             return
         try:

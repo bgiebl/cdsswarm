@@ -115,56 +115,71 @@ def _run_interactive(
         )
         download_thread.start()
 
-        # Input loop: poll at 200ms intervals so Running column ticks
-        stdscr.timeout(200)
+        def _process_key(key):
+            """Handle a single key press. Returns True to quit."""
+            if tui.handle_checksum_key(key):
+                return False
+            if key == ord("q"):
+                downloader.cancel()
+                tui.set_status_line("Cancelling...")
+                return True
+            elif key == curses.KEY_RESIZE:
+                tui.handle_resize()
+            elif key == curses.KEY_UP:
+                tui.select_up()
+            elif key == curses.KEY_DOWN:
+                tui.select_down()
+            elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
+                if tui._view_mode == "logs":
+                    tui.close_log_view()
+                else:
+                    tui.open_log_view()
+            elif key == ord("a"):
+                if tui._view_mode == "params":
+                    tui.close_fullscreen_view()
+                elif tui._view_mode == "table":
+                    tui.open_params_view()
+            elif key == 27:  # Escape
+                tui.close_fullscreen_view()
+            elif key == curses.KEY_PPAGE:
+                tui.page_up()
+            elif key == curses.KEY_NPAGE:
+                tui.page_down()
+            elif key == curses.KEY_HOME:
+                tui.log_home()
+            elif key == curses.KEY_END:
+                tui.log_end()
+            elif key == curses.KEY_MOUSE:
+                try:
+                    mouse_event = curses.getmouse()
+                    tui.handle_mouse(mouse_event)
+                except curses.error:
+                    pass
+            return False
+
+        # Input loop: poll at ~20fps so elapsed column ticks smoothly
+        stdscr.timeout(50)
         try:
             while download_thread.is_alive():
                 try:
                     key = stdscr.getch()
                 except curses.error:
-                    continue
-                if key == -1:
-                    # Timeout — refresh to tick the Running column
-                    tui.refresh()
-                    continue
-                if tui.handle_checksum_key(key):
-                    continue
-                if key == ord("q"):
-                    downloader.cancel()
-                    tui.set_status_line("Cancelling...")
-                    break
-                elif key == curses.KEY_RESIZE:
-                    tui.handle_resize()
-                elif key == curses.KEY_UP:
-                    tui.select_up()
-                elif key == curses.KEY_DOWN:
-                    tui.select_down()
-                elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
-                    if tui._view_mode == "logs":
-                        tui.close_log_view()
-                    else:
-                        tui.open_log_view()
-                elif key == ord("a"):
-                    if tui._view_mode == "params":
-                        tui.close_fullscreen_view()
-                    elif tui._view_mode == "table":
-                        tui.open_params_view()
-                elif key == 27:  # Escape
-                    tui.close_fullscreen_view()
-                elif key == curses.KEY_PPAGE:
-                    tui.page_up()
-                elif key == curses.KEY_NPAGE:
-                    tui.page_down()
-                elif key == curses.KEY_HOME:
-                    tui.log_home()
-                elif key == curses.KEY_END:
-                    tui.log_end()
-                elif key == curses.KEY_MOUSE:
-                    try:
-                        mouse_event = curses.getmouse()
-                        tui.handle_mouse(mouse_event)
-                    except curses.error:
-                        pass
+                    key = -1
+                if key != -1:
+                    if _process_key(key):
+                        break
+                    # Drain any remaining buffered keys before refreshing
+                    stdscr.nodelay(True)
+                    while True:
+                        try:
+                            k = stdscr.getch()
+                        except curses.error:
+                            break
+                        if k == -1:
+                            break
+                        if _process_key(k):
+                            break
+                tui.refresh()
         except KeyboardInterrupt:
             downloader.cancel()
             tui.set_status_line("Interrupted \u2014 cancelling...")
