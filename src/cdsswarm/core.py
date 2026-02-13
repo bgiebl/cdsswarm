@@ -78,12 +78,14 @@ class SwarmDownloader:
         num_workers: int = 4,
         skip_existing: bool = True,
         reuse_jobs: bool = False,
+        max_retries: int = 3,
     ):
         self._all_tasks = list(tasks)
         self._adapter = adapter
         self._num_workers = num_workers
         self._skip_existing = skip_existing
         self._reuse_jobs = reuse_jobs
+        self._max_retries = max(max_retries, 1)
         self._cancel_event = threading.Event()
         self._state: _WorkerState | None = None
         self._pool: ThreadPoolExecutor | None = None
@@ -256,7 +258,9 @@ class SwarmDownloader:
         self._adapter.on_task_started(wid, task)
         os.makedirs(os.path.dirname(os.path.abspath(task.target)), exist_ok=True)
 
+        attempt = 0
         while True:
+            attempt += 1
             try:
                 if reuse_id is not None:
                     self._adapter.on_task_message(
@@ -273,7 +277,20 @@ class SwarmDownloader:
             except Exception:
                 with state.lock:
                     state.active_requests.pop(task.target, None)
-                raise
+                if attempt >= self._max_retries or self._cancel_event.is_set():
+                    raise
+                delay = min(2 ** (attempt - 1), 60)
+                self._adapter.on_task_message(
+                    wid,
+                    f"Attempt {attempt}/{self._max_retries} failed, "
+                    f"retrying in {delay}s...",
+                )
+                reuse_id = None  # don't reuse a broken job
+                for _ in range(int(delay * 2)):
+                    if self._cancel_event.is_set():
+                        raise
+                    self._cancel_event.wait(0.5)
+                continue
 
             # Checksum verification
             rid = None

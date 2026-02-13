@@ -89,6 +89,7 @@ def _run_interactive(
     num_workers: int,
     skip_existing: bool,
     reuse_jobs: bool = True,
+    max_retries: int = 3,
 ):
     """Launch curses TUI and run downloads inside it."""
     tui = CursesTUI(num_workers=num_workers)
@@ -104,6 +105,7 @@ def _run_interactive(
             num_workers=num_workers,
             skip_existing=skip_existing,
             reuse_jobs=reuse_jobs,
+            max_retries=max_retries,
         )
 
         import threading as _thr
@@ -196,6 +198,7 @@ def _run_script(
     num_workers: int,
     skip_existing: bool,
     reuse_jobs: bool = True,
+    max_retries: int = 3,
 ):
     """Run downloads with plain text output."""
     adapter = PlainTextAdapter()
@@ -205,6 +208,7 @@ def _run_script(
         num_workers=num_workers,
         skip_existing=skip_existing,
         reuse_jobs=reuse_jobs,
+        max_retries=max_retries,
     )
     return downloader.run()
 
@@ -251,6 +255,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Reuse existing CDS jobs with matching parameters (default: enabled)",
     )
     parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="Max retry attempts per task (default: 3, 1 to disable)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Show what would be downloaded without actually downloading",
@@ -288,9 +298,13 @@ def main(argv: list[str] | None = None):
     skip_existing = not args.no_skip
 
     if mode == "interactive":
-        results = _run_interactive(tasks, args.workers, skip_existing, args.reuse)
+        results = _run_interactive(
+            tasks, args.workers, skip_existing, args.reuse, args.max_retries
+        )
     else:
-        results = _run_script(tasks, args.workers, skip_existing, args.reuse)
+        results = _run_script(
+            tasks, args.workers, skip_existing, args.reuse, args.max_retries
+        )
 
     if results is None:
         sys.exit(1)

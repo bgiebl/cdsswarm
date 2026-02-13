@@ -36,6 +36,7 @@ def download(
     num_workers: int = 4,
     skip_existing: bool = True,
     reuse_jobs: bool = False,
+    max_retries: int = 3,
     on_message=None,
 ) -> list[Result]:
     """Download multiple CDS API requests concurrently.
@@ -45,6 +46,7 @@ def download(
         num_workers: Number of parallel download workers.
         skip_existing: Skip tasks whose target file already exists.
         reuse_jobs: Reuse existing CDS jobs with matching parameters.
+        max_retries: Max retry attempts per task (1 to disable retries).
         on_message: Optional callback ``fn(message: str)`` for status messages.
 
     Returns:
@@ -57,6 +59,7 @@ def download(
         num_workers=num_workers,
         skip_existing=skip_existing,
         reuse_jobs=reuse_jobs,
+        max_retries=max_retries,
     )
     results = downloader.run()
     return results if results is not None else []

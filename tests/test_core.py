@@ -301,3 +301,96 @@ class TestSwarmDownloader:
         assert results is not None
         mock_find.assert_not_called()
         assert mock_client.retrieve.call_count == 1
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_retry_succeeds_after_transient_failure(self, mock_cdsapi, tmp_dir):
+        """Task succeeds after transient failures when retries are available."""
+        mock_client = MagicMock()
+        call_count = [0]
+
+        def fake_retrieve(dataset, request, target):
+            call_count[0] += 1
+            if call_count[0] < 3:
+                raise RuntimeError("transient error")
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, max_retries=3)
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 1
+        assert results[0].success
+        assert call_count[0] == 3
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_retry_exhausted(self, mock_cdsapi, tmp_dir):
+        """Task fails after all retry attempts are exhausted."""
+        mock_client = MagicMock()
+        mock_client.retrieve.side_effect = RuntimeError("persistent error")
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, max_retries=3)
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 1
+        assert not results[0].success
+        assert "persistent error" in results[0].error
+        assert mock_client.retrieve.call_count == 3
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_retry_disabled(self, mock_cdsapi, tmp_dir):
+        """max_retries=1 means no retries — immediate failure."""
+        mock_client = MagicMock()
+        mock_client.retrieve.side_effect = RuntimeError("fail")
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, max_retries=1)
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 1
+        assert not results[0].success
+        assert mock_client.retrieve.call_count == 1
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_retry_message_sent(self, mock_cdsapi, tmp_dir):
+        """Adapter receives retry messages on transient failures."""
+        mock_client = MagicMock()
+        call_count = [0]
+
+        def fake_retrieve(dataset, request, target):
+            call_count[0] += 1
+            if call_count[0] < 2:
+                raise RuntimeError("temporary")
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, max_retries=3)
+        results = downloader.run()
+
+        assert results is not None
+        assert results[0].success
+        # Check that on_task_message was called with retry info
+        retry_messages = [
+            call
+            for call in adapter.on_task_message.call_args_list
+            if "retrying" in str(call).lower()
+        ]
+        assert len(retry_messages) == 1
+        assert "1/3" in str(retry_messages[0])
