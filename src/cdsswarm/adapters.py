@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING
 
 from ._cds_utils import parse_cds_status
 
@@ -181,3 +182,81 @@ class CursesAdapter(OutputAdapter):
 
     def on_global_message(self, message):
         self._tui.set_status_line(message)
+
+
+class LoggingAdapter(OutputAdapter):
+    """Decorator that logs all adapter events to a file, then delegates."""
+
+    def __init__(self, inner: OutputAdapter, log_file: IO[str]):
+        self._inner = inner
+        self._log_file = log_file
+
+    def _write(self, line: str):
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._log_file.write(f"[{ts}] {line}\n")
+        self._log_file.flush()
+
+    def on_task_started(self, worker_id, task):
+        self._write(f"[worker {worker_id}] started: {task.label}")
+        self._inner.on_task_started(worker_id, task)
+
+    def on_task_message(self, worker_id, message):
+        self._write(f"[worker {worker_id}] {message}")
+        self._inner.on_task_message(worker_id, message)
+
+    def on_task_completed(self, worker_id, task, success, error=""):
+        status = "ok" if success else f"FAILED: {error}"
+        self._write(f"[worker {worker_id}] completed: {task.label} ({status})")
+        self._inner.on_task_completed(worker_id, task, success, error)
+
+    def on_progress_update(self, completed, total, skipped):
+        self._write(f"progress: {completed}/{total} (skipped {skipped})")
+        self._inner.on_progress_update(completed, total, skipped)
+
+    def on_global_message(self, message):
+        self._write(message)
+        self._inner.on_global_message(message)
+
+    def on_task_request_id(self, worker_id, request_id):
+        self._write(f"[worker {worker_id}] request_id: {request_id}")
+        self._inner.on_task_request_id(worker_id, request_id)
+
+    def on_task_progress(self, worker_id, downloaded_bytes, total_bytes):
+        # Skip logging — too noisy
+        self._inner.on_task_progress(worker_id, downloaded_bytes, total_bytes)
+
+    def on_task_cancelled(self, worker_id):
+        self._write(f"[worker {worker_id}] cancelled")
+        self._inner.on_task_cancelled(worker_id)
+
+    def on_task_server_progress(self, worker_id, progress):
+        self._write(f"[worker {worker_id}] server progress: {progress}%")
+        self._inner.on_task_server_progress(worker_id, progress)
+
+    def on_task_file_size(self, worker_id, file_size):
+        self._write(f"[worker {worker_id}] file size: {file_size}")
+        self._inner.on_task_file_size(worker_id, file_size)
+
+    def on_task_checksum_result(self, worker_id, passed, expected):
+        status = "passed" if passed else "FAILED"
+        self._write(f"[worker {worker_id}] checksum {status} (expected {expected})")
+        return self._inner.on_task_checksum_result(worker_id, passed, expected)
+
+    def on_task_server_timestamps(self, worker_id, created, started, finished):
+        self._write(
+            f"[worker {worker_id}] server timestamps: "
+            f"created={created} started={started} finished={finished}"
+        )
+        self._inner.on_task_server_timestamps(worker_id, created, started, finished)
+
+    def on_task_dataset_title(self, worker_id, title):
+        self._write(f"[worker {worker_id}] dataset: {title}")
+        self._inner.on_task_dataset_title(worker_id, title)
+
+    def on_task_request_labels(self, worker_id, labels):
+        self._write(f"[worker {worker_id}] labels: {labels}")
+        self._inner.on_task_request_labels(worker_id, labels)
+
+    def on_qos_update(self, queued, running, limit):
+        self._write(f"qos: queued={queued} running={running} limit={limit}")
+        self._inner.on_qos_update(queued, running, limit)

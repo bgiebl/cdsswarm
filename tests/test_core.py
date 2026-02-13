@@ -52,6 +52,22 @@ class TestResult:
         assert not r.success
         assert r.error == "network error"
 
+    def test_timing_defaults(self):
+        t = Task("ds", {}, "out.grib")
+        r = Result(task=t, success=True)
+        assert r.start_time == 0.0
+        assert r.end_time == 0.0
+        assert r.file_size == 0
+
+    def test_timing_fields(self):
+        t = Task("ds", {}, "out.grib")
+        r = Result(
+            task=t, success=True, start_time=100.0, end_time=200.0, file_size=1024
+        )
+        assert r.start_time == 100.0
+        assert r.end_time == 200.0
+        assert r.file_size == 1024
+
 
 class TestSwarmDownloader:
     @patch("cdsswarm.core.cdsapi")
@@ -75,6 +91,10 @@ class TestSwarmDownloader:
         assert results is not None
         assert len(results) == 2
         assert all(r.success for r in results)
+        for r in results:
+            assert r.start_time > 0
+            assert r.end_time >= r.start_time
+            assert r.file_size > 0
 
     @patch("cdsswarm.core.cdsapi")
     def test_failed_download(self, mock_cdsapi, tmp_dir):

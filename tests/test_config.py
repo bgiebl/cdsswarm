@@ -59,6 +59,16 @@ class TestLoadToml:
         assert result == {"output_dir": "data/cds/"}
 
 
+class TestDefaults:
+    def test_log_in_defaults(self):
+        assert "log" in DEFAULTS
+        assert DEFAULTS["log"] == ""
+
+    def test_summary_in_defaults(self):
+        assert "summary" in DEFAULTS
+        assert DEFAULTS["summary"] == ""
+
+
 class TestValidateConfig:
     def test_valid_config(self):
         _validate_config({"workers": 4, "mode": "script"}, "test")
@@ -78,6 +88,20 @@ class TestValidateConfig:
     def test_max_retries_below_one(self):
         with pytest.raises(ValueError, match="must be >= 1"):
             _validate_config({"max_retries": 0}, "test")
+
+    def test_log_wrong_type(self):
+        with pytest.raises(ValueError, match="must be str"):
+            _validate_config({"log": 123}, "test")
+
+    def test_summary_wrong_type(self):
+        with pytest.raises(ValueError, match="must be str"):
+            _validate_config({"summary": True}, "test")
+
+    def test_log_valid(self):
+        _validate_config({"log": "run.log"}, "test")
+
+    def test_summary_valid(self):
+        _validate_config({"summary": "report.json"}, "test")
 
 
 class TestLoadConfig:

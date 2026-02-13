@@ -17,6 +17,8 @@ DEFAULTS: dict[str, object] = {
     "skip_existing": True,
     "mode": "auto",
     "output_dir": "",
+    "log": "",
+    "summary": "",
 }
 
 _VALID_KEYS = set(DEFAULTS)
@@ -31,6 +33,8 @@ _TYPE_CHECKS: dict[str, type | tuple[type, ...]] = {
     "skip_existing": bool,
     "mode": str,
     "output_dir": str,
+    "log": str,
+    "summary": str,
 }
 
 _VALUE_CHECKS: dict[str, object] = {

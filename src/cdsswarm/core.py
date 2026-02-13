@@ -5,6 +5,7 @@ from __future__ import annotations
 import itertools
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
@@ -48,6 +49,9 @@ class Result:
     task: Task
     success: bool
     error: str = ""
+    start_time: float = 0.0
+    end_time: float = 0.0
+    file_size: int = 0
 
 
 @dataclass
@@ -89,6 +93,7 @@ class SwarmDownloader:
         self._cancel_event = threading.Event()
         self._state: _WorkerState | None = None
         self._pool: ThreadPoolExecutor | None = None
+        self._task_timing: dict[str, tuple[float, float, int]] = {}
 
     def cancel(self):
         """Cancel all in-flight CDS requests and shut down the pool.
@@ -181,13 +186,31 @@ class SwarmDownloader:
                 completed += 1
                 wid = state.task_worker_map.get(task.target, 0)
                 self._adapter.on_progress_update(completed, len(pending), skipped)
+                timing = self._task_timing.get(task.target, (0.0, 0.0, 0))
                 try:
                     future.result()
                     self._adapter.on_task_completed(wid, task, True)
-                    results.append(Result(task=task, success=True))
+                    results.append(
+                        Result(
+                            task=task,
+                            success=True,
+                            start_time=timing[0],
+                            end_time=timing[1],
+                            file_size=timing[2],
+                        )
+                    )
                 except Exception as e:
                     self._adapter.on_task_completed(wid, task, False, str(e))
-                    results.append(Result(task=task, success=False, error=str(e)))
+                    results.append(
+                        Result(
+                            task=task,
+                            success=False,
+                            error=str(e),
+                            start_time=timing[0],
+                            end_time=timing[1],
+                            file_size=timing[2],
+                        )
+                    )
         except KeyboardInterrupt:
             self._cancel_event.set()
             self._adapter.on_global_message("Interrupted \u2014 cancelling...")
@@ -255,80 +278,86 @@ class SwarmDownloader:
         silence_loggers()
         if poller is not None:
             poller.register_client(client)
+        start = time.time()
         self._adapter.on_task_started(wid, task)
         os.makedirs(os.path.dirname(os.path.abspath(task.target)), exist_ok=True)
 
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                if reuse_id is not None:
-                    self._adapter.on_task_message(
-                        wid, f"Reusing existing job {reuse_id}"
-                    )
-                    inner = getattr(client, "client", None)
-                    if inner is not None:
-                        remote = inner.get_remote(reuse_id)
-                        remote.download(task.target)
+        try:
+            attempt = 0
+            while True:
+                attempt += 1
+                try:
+                    if reuse_id is not None:
+                        self._adapter.on_task_message(
+                            wid, f"Reusing existing job {reuse_id}"
+                        )
+                        inner = getattr(client, "client", None)
+                        if inner is not None:
+                            remote = inner.get_remote(reuse_id)
+                            remote.download(task.target)
+                        else:
+                            client.retrieve(task.dataset, task.request, task.target)
                     else:
                         client.retrieve(task.dataset, task.request, task.target)
-                else:
-                    client.retrieve(task.dataset, task.request, task.target)
-            except Exception:
+                except Exception:
+                    with state.lock:
+                        state.active_requests.pop(task.target, None)
+                    if attempt >= self._max_retries or self._cancel_event.is_set():
+                        raise
+                    delay = min(2 ** (attempt - 1), 60)
+                    self._adapter.on_task_message(
+                        wid,
+                        f"Attempt {attempt}/{self._max_retries} failed, "
+                        f"retrying in {delay}s...",
+                    )
+                    reuse_id = None  # don't reuse a broken job
+                    for _ in range(int(delay * 2)):
+                        if self._cancel_event.is_set():
+                            raise
+                        self._cancel_event.wait(0.5)
+                    continue
+
+                # Checksum verification
+                rid = None
+                with state.lock:
+                    req_info = state.active_requests.get(task.target)
+                    if req_info:
+                        rid = req_info[0]
+
+                should_retry = False
+                if rid:
+                    try:
+                        inner = getattr(client, "client", None)
+                        if inner is not None and hasattr(inner, "_get_headers"):
+                            _file_size, checksum_md5 = fetch_job_results(inner, rid)
+                            if checksum_md5:
+                                passed = verify_checksum(task.target, checksum_md5)
+                                decision = self._adapter.on_task_checksum_result(
+                                    wid, passed, checksum_md5
+                                )
+                                if not passed:
+                                    self._adapter.on_task_message(
+                                        wid,
+                                        f"Checksum mismatch (expected {checksum_md5})",
+                                    )
+                                    if decision == "retry":
+                                        should_retry = True
+                                else:
+                                    self._adapter.on_task_message(wid, "Checksum OK")
+                    except Exception:
+                        pass  # Graceful degradation
+
                 with state.lock:
                     state.active_requests.pop(task.target, None)
-                if attempt >= self._max_retries or self._cancel_event.is_set():
-                    raise
-                delay = min(2 ** (attempt - 1), 60)
-                self._adapter.on_task_message(
-                    wid,
-                    f"Attempt {attempt}/{self._max_retries} failed, "
-                    f"retrying in {delay}s...",
-                )
-                reuse_id = None  # don't reuse a broken job
-                for _ in range(int(delay * 2)):
-                    if self._cancel_event.is_set():
-                        raise
-                    self._cancel_event.wait(0.5)
-                continue
 
-            # Checksum verification
-            rid = None
-            with state.lock:
-                req_info = state.active_requests.get(task.target)
-                if req_info:
-                    rid = req_info[0]
-
-            should_retry = False
-            if rid:
-                try:
-                    inner = getattr(client, "client", None)
-                    if inner is not None and hasattr(inner, "_get_headers"):
-                        _file_size, checksum_md5 = fetch_job_results(inner, rid)
-                        if checksum_md5:
-                            passed = verify_checksum(task.target, checksum_md5)
-                            decision = self._adapter.on_task_checksum_result(
-                                wid, passed, checksum_md5
-                            )
-                            if not passed:
-                                self._adapter.on_task_message(
-                                    wid,
-                                    f"Checksum mismatch (expected {checksum_md5})",
-                                )
-                                if decision == "retry":
-                                    should_retry = True
-                            else:
-                                self._adapter.on_task_message(wid, "Checksum OK")
-                except Exception:
-                    pass  # Graceful degradation
-
-            with state.lock:
-                state.active_requests.pop(task.target, None)
-
-            if should_retry:
-                self._adapter.on_task_message(wid, "Retrying download...")
-                continue
-            break  # Success, exit retry loop
+                if should_retry:
+                    self._adapter.on_task_message(wid, "Retrying download...")
+                    continue
+                break  # Success, exit retry loop
+        finally:
+            end = time.time()
+            size = os.path.getsize(task.target) if os.path.exists(task.target) else 0
+            self._task_timing[task.target] = (start, end, size)
 
     def _get_worker_id(self, state: _WorkerState) -> int:
         tid = threading.current_thread().ident

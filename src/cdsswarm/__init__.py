@@ -26,9 +26,10 @@ from importlib.metadata import version as _pkg_version
 
 from .adapters import PlainTextAdapter
 from .core import Result, SwarmDownloader, Task
+from .summary import build_summary
 
 __version__ = _pkg_version("cdsswarm")
-__all__ = ["Task", "Result", "download", "__version__"]
+__all__ = ["Task", "Result", "build_summary", "download", "__version__"]
 
 
 def download(

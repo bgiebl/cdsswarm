@@ -108,6 +108,8 @@ class TestCLIParsing:
         assert args.reuse is None
         assert args.max_retries is None
         assert args.output_dir is None
+        assert args.log is None
+        assert args.summary is None
         assert not args.dry_run
 
     def test_custom_args(self):
@@ -158,6 +160,20 @@ class TestCLIParsing:
         parser = _build_parser()
         args = parser.parse_args(["f.json", "--output-dir", "data/cds/"])
         assert args.output_dir == "data/cds/"
+
+    def test_log_flag(self):
+        from cdsswarm.cli import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(["f.json", "--log", "run.log"])
+        assert args.log == "run.log"
+
+    def test_summary_flag(self):
+        from cdsswarm.cli import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(["f.json", "--summary", "report.json"])
+        assert args.summary == "report.json"
 
     def test_version(self, capsys):
         from cdsswarm.cli import _build_parser

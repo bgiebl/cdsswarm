@@ -8,9 +8,11 @@ import json
 import os
 import shutil
 import sys
+import time
 
-from .adapters import CursesAdapter, PlainTextAdapter
+from .adapters import CursesAdapter, LoggingAdapter, PlainTextAdapter
 from .core import Result, SwarmDownloader, Task
+from .summary import export_summary, print_summary
 from .tui import CursesTUI
 
 
@@ -90,6 +92,7 @@ def _run_interactive(
     skip_existing: bool,
     reuse_jobs: bool = True,
     max_retries: int = 3,
+    log_file=None,
 ):
     """Launch curses TUI and run downloads inside it."""
     tui = CursesTUI(num_workers=num_workers)
@@ -99,6 +102,8 @@ def _run_interactive(
         nonlocal results
         tui.start(stdscr)
         adapter = CursesAdapter(tui)
+        if log_file:
+            adapter = LoggingAdapter(adapter, log_file)
         downloader = SwarmDownloader(
             tasks=tasks,
             adapter=adapter,
@@ -214,9 +219,12 @@ def _run_script(
     skip_existing: bool,
     reuse_jobs: bool = True,
     max_retries: int = 3,
+    log_file=None,
 ):
     """Run downloads with plain text output."""
     adapter = PlainTextAdapter()
+    if log_file:
+        adapter = LoggingAdapter(adapter, log_file)
     downloader = SwarmDownloader(
         tasks=tasks,
         adapter=adapter,
@@ -286,6 +294,18 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show what would be downloaded without actually downloading",
     )
+    parser.add_argument(
+        "--log",
+        default=None,
+        metavar="FILE",
+        help="Write timestamped log to FILE",
+    )
+    parser.add_argument(
+        "--summary",
+        default=None,
+        metavar="FILE",
+        help="Export summary as JSON (.json) or CSV (.csv)",
+    )
     return parser
 
 
@@ -314,6 +334,8 @@ def main(argv: list[str] | None = None):
         "reuse": args.reuse,
         "max_retries": args.max_retries,
         "output_dir": args.output_dir,
+        "log": args.log,
+        "summary": args.summary,
     }
     if args.no_skip is True:
         cli_overrides["skip_existing"] = False
@@ -347,14 +369,42 @@ def main(argv: list[str] | None = None):
     workers = settings["workers"]
     reuse = settings["reuse"]
     max_retries = settings["max_retries"]
+    log_path = settings["log"]
+    summary_path = settings["summary"]
 
-    if mode == "interactive":
-        results = _run_interactive(tasks, workers, skip_existing, reuse, max_retries)
-    else:
-        results = _run_script(tasks, workers, skip_existing, reuse, max_retries)
+    log_file = open(log_path, "a") if log_path else None
+    try:
+        wall_start = time.time()
+        if mode == "interactive":
+            results = _run_interactive(
+                tasks,
+                workers,
+                skip_existing,
+                reuse,
+                max_retries,
+                log_file=log_file,
+            )
+        else:
+            results = _run_script(
+                tasks,
+                workers,
+                skip_existing,
+                reuse,
+                max_retries,
+                log_file=log_file,
+            )
+        wall_end = time.time()
+    finally:
+        if log_file:
+            log_file.close()
 
     if results is None:
         sys.exit(1)
+
+    print_summary(results, wall_start, wall_end)
+    if summary_path:
+        export_summary(results, wall_start, wall_end, summary_path)
+
     if any(not r.success for r in results):
         sys.exit(1)
     sys.exit(0)
