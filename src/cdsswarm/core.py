@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 import cdsapi
 
+from ._cds_metadata import MetadataPoller, fetch_job_results, verify_checksum
 from ._cds_utils import (
     cancel_cds_request,
     find_reusable_jobs,
@@ -152,6 +153,10 @@ class SwarmDownloader:
             state.worker_id_map,
             state.lock,
         )
+        poller = MetadataPoller(
+            self._adapter, state, self._cancel_event, poll_interval=10.0
+        )
+        poller.start()
         self._pool = pool = ThreadPoolExecutor(max_workers=self._num_workers)
         futures = {
             pool.submit(
@@ -159,6 +164,7 @@ class SwarmDownloader:
                 task,
                 state,
                 reuse_map.get(task.target),
+                poller,
             ): task
             for task in pending
         }
@@ -166,9 +172,6 @@ class SwarmDownloader:
         try:
             for future in as_completed(futures):
                 if self._cancel_event.is_set():
-                    # cancel() may already have done shutdown + API cancel;
-                    # call again is safe (shutdown is idempotent, _cancel_active
-                    # skips already-removed requests).
                     pool.shutdown(wait=False, cancel_futures=True)
                     self._cancel_active(state)
                     return None
@@ -192,6 +195,7 @@ class SwarmDownloader:
         else:
             pool.shutdown(wait=True)
         finally:
+            poller.stop()
             self._pool = None
             self._state = None
             uninstall_progress_router(router_state)
@@ -209,6 +213,7 @@ class SwarmDownloader:
         task: Task,
         state: _WorkerState,
         reuse_id: str | None = None,
+        poller: MetadataPoller | None = None,
     ):
         """Download a single task. Runs in a worker thread."""
         wid = self._get_worker_id(state)
@@ -246,22 +251,67 @@ class SwarmDownloader:
             debug_callback=_debug_cb,
         )
         silence_loggers()
+        if poller is not None:
+            poller.register_client(client)
         self._adapter.on_task_started(wid, task)
         os.makedirs(os.path.dirname(os.path.abspath(task.target)), exist_ok=True)
-        try:
-            if reuse_id is not None:
-                self._adapter.on_task_message(wid, f"Reusing existing job {reuse_id}")
-                inner = getattr(client, "client", None)
-                if inner is not None:
-                    remote = inner.get_remote(reuse_id)
-                    remote.download(task.target)
+
+        while True:
+            try:
+                if reuse_id is not None:
+                    self._adapter.on_task_message(
+                        wid, f"Reusing existing job {reuse_id}"
+                    )
+                    inner = getattr(client, "client", None)
+                    if inner is not None:
+                        remote = inner.get_remote(reuse_id)
+                        remote.download(task.target)
+                    else:
+                        client.retrieve(task.dataset, task.request, task.target)
                 else:
                     client.retrieve(task.dataset, task.request, task.target)
-            else:
-                client.retrieve(task.dataset, task.request, task.target)
-        finally:
+            except Exception:
+                with state.lock:
+                    state.active_requests.pop(task.target, None)
+                raise
+
+            # Checksum verification
+            rid = None
+            with state.lock:
+                req_info = state.active_requests.get(task.target)
+                if req_info:
+                    rid = req_info[0]
+
+            should_retry = False
+            if rid:
+                try:
+                    inner = getattr(client, "client", None)
+                    if inner is not None and hasattr(inner, "_get_headers"):
+                        _file_size, checksum_md5 = fetch_job_results(inner, rid)
+                        if checksum_md5:
+                            passed = verify_checksum(task.target, checksum_md5)
+                            decision = self._adapter.on_task_checksum_result(
+                                wid, passed, checksum_md5
+                            )
+                            if not passed:
+                                self._adapter.on_task_message(
+                                    wid,
+                                    f"Checksum mismatch (expected {checksum_md5})",
+                                )
+                                if decision == "retry":
+                                    should_retry = True
+                            else:
+                                self._adapter.on_task_message(wid, "Checksum OK")
+                except Exception:
+                    pass  # Graceful degradation
+
             with state.lock:
                 state.active_requests.pop(task.target, None)
+
+            if should_retry:
+                self._adapter.on_task_message(wid, "Retrying download...")
+                continue
+            break  # Success, exit retry loop
 
     def _get_worker_id(self, state: _WorkerState) -> int:
         tid = threading.current_thread().ident

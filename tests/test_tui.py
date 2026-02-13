@@ -306,10 +306,10 @@ class TestFormattingHelpers:
 
 
 class TestColumnSpecs:
-    def test_returns_eight_columns(self):
+    def test_returns_nine_columns(self):
         tui = CursesTUI(num_workers=1)
         cols = tui._column_specs(120)
-        assert len(cols) == 8
+        assert len(cols) == 9
 
     def test_column_labels(self):
         tui = CursesTUI(num_workers=1)
@@ -318,6 +318,7 @@ class TestColumnSpecs:
         assert labels == [
             "W",
             "Status",
+            "Prog",
             "Filename",
             "Started",
             "Elapsed",
@@ -655,9 +656,9 @@ class TestInfoPanel:
         tui._worker_request_params[0] = {"variable": "2m_temperature", "year": "2024"}
         with _mock_curses():
             tui._draw_info_panel(120)
-        # Params are on rows 8-11
+        # Params are on rows 10-13
         calls = [
-            c for c in stdscr.addnstr.call_args_list if c.args[0] in (8, 9, 10, 11)
+            c for c in stdscr.addnstr.call_args_list if c.args[0] in (10, 11, 12, 13)
         ]
         texts = [c.args[2] for c in calls]
         assert any("variable=2m_temperature" in t for t in texts)
@@ -940,3 +941,305 @@ class TestTableScroll:
         with _mock_curses():
             tui._draw_table(120, available_height=20)
         assert tui._table_scroll >= 0
+
+
+class TestNewMetadataSetters:
+    """Tests for the new metadata-related setter methods."""
+
+    def test_set_worker_server_progress(self):
+        tui = CursesTUI(num_workers=2)
+        tui._stdscr = _mock_stdscr()
+        tui.set_worker_server_progress(0, 72)
+        assert tui._worker_server_progress[0] == 72
+        assert tui._worker_server_progress[1] is None
+
+    def test_set_worker_file_size(self):
+        tui = CursesTUI(num_workers=2)
+        tui._stdscr = _mock_stdscr()
+        tui.set_worker_file_size(0, 95418)
+        assert tui._worker_file_size[0] == 95418
+        # Also populates dl_total when not already set
+        assert tui._worker_dl_total[0] == 95418
+
+    def test_set_worker_file_size_no_override_tqdm(self):
+        tui = CursesTUI(num_workers=2)
+        tui._stdscr = _mock_stdscr()
+        tui._worker_dl_total[0] = 100000  # Already set by tqdm
+        tui.set_worker_file_size(0, 95418)
+        assert tui._worker_file_size[0] == 95418
+        assert tui._worker_dl_total[0] == 100000  # Not overridden
+
+    def test_set_worker_checksum_result(self):
+        tui = CursesTUI(num_workers=2)
+        tui._stdscr = _mock_stdscr()
+        tui.set_worker_checksum_result(0, True)
+        assert tui._worker_checksum[0] is True
+        tui.set_worker_checksum_result(1, False)
+        assert tui._worker_checksum[1] is False
+
+    def test_set_worker_server_timestamps(self):
+        tui = CursesTUI(num_workers=2)
+        tui._stdscr = _mock_stdscr()
+        tui.set_worker_server_timestamps(
+            0, "2024-01-01T00:00:00Z", "2024-01-01T00:05:00Z", ""
+        )
+        assert tui._worker_server_created[0] == "2024-01-01T00:00:00Z"
+        assert tui._worker_server_started[0] == "2024-01-01T00:05:00Z"
+        assert tui._worker_server_finished[0] == ""
+
+    def test_set_worker_dataset_title(self):
+        tui = CursesTUI(num_workers=2)
+        tui._stdscr = _mock_stdscr()
+        tui.set_worker_dataset_title(0, "ERA5 hourly data on single levels")
+        assert tui._worker_dataset_title[0] == "ERA5 hourly data on single levels"
+        assert tui._worker_dataset_title[1] == ""
+
+    def test_set_worker_request_labels(self):
+        tui = CursesTUI(num_workers=2)
+        tui._stdscr = _mock_stdscr()
+        labels = {"Variable": "2m temperature", "Year": "2024"}
+        tui.set_worker_request_labels(0, labels)
+        assert tui._worker_request_labels[0] == labels
+        assert tui._worker_request_labels[1] is None
+
+    def test_set_qos_data(self):
+        tui = CursesTUI(num_workers=2)
+        tui._stdscr = _mock_stdscr()
+        tui.set_qos_data(5220, 400, 400)
+        assert tui._qos_queued == 5220
+        assert tui._qos_running == 400
+        assert tui._qos_limit == 400
+
+    def test_clear_worker_log_resets_metadata(self):
+        tui = CursesTUI(num_workers=2)
+        tui._stdscr = _mock_stdscr()
+        tui.set_worker_server_progress(0, 50)
+        tui.set_worker_file_size(0, 1000)
+        tui.set_worker_checksum_result(0, True)
+        tui.set_worker_server_timestamps(0, "a", "b", "c")
+        tui.set_worker_dataset_title(0, "title")
+        tui.set_worker_request_labels(0, {"k": "v"})
+        tui.clear_worker_log(0)
+        assert tui._worker_server_progress[0] is None
+        assert tui._worker_file_size[0] is None
+        assert tui._worker_checksum[0] is None
+        assert tui._worker_server_created[0] is None
+        assert tui._worker_server_started[0] is None
+        assert tui._worker_server_finished[0] is None
+        assert tui._worker_dataset_title[0] == ""
+        assert tui._worker_request_labels[0] is None
+
+    def test_out_of_range_setters(self):
+        tui = CursesTUI(num_workers=2)
+        tui._stdscr = _mock_stdscr()
+        # Should not raise for out-of-range
+        tui.set_worker_server_progress(5, 50)
+        tui.set_worker_file_size(-1, 1000)
+        tui.set_worker_checksum_result(99, True)
+        tui.set_worker_server_timestamps(10, "", "", "")
+        tui.set_worker_dataset_title(5, "title")
+        tui.set_worker_request_labels(5, {})
+
+
+class TestFormatServerProgress:
+    def test_none(self):
+        tui = CursesTUI(num_workers=1)
+        assert tui._format_server_progress(0) == "---"
+
+    def test_zero(self):
+        tui = CursesTUI(num_workers=1)
+        tui._worker_server_progress[0] = 0
+        assert tui._format_server_progress(0) == "0%"
+
+    def test_middle(self):
+        tui = CursesTUI(num_workers=1)
+        tui._worker_server_progress[0] = 72
+        assert tui._format_server_progress(0) == "72%"
+
+    def test_complete(self):
+        tui = CursesTUI(num_workers=1)
+        tui._worker_server_progress[0] = 100
+        assert tui._format_server_progress(0) == "100%"
+
+
+class TestInfoPanelNew:
+    """Tests for new info panel features."""
+
+    def _make_tui(self, num_workers=3, height=35, width=120):
+        tui = CursesTUI(num_workers=num_workers)
+        stdscr = _mock_stdscr(height, width)
+        tui._stdscr = stdscr
+        tui._last_size = (height, width)
+        return tui, stdscr
+
+    def test_header_rows_is_sixteen(self):
+        assert CursesTUI.HEADER_ROWS == 16
+
+    def test_info_panel_shows_dataset_title(self):
+        tui, stdscr = self._make_tui()
+        tui._worker_dataset_title[0] = "ERA5 hourly data on single levels"
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 6]
+        texts = [c.args[2] for c in calls]
+        assert any("ERA5 hourly data on single levels" in t for t in texts)
+
+    def test_info_panel_falls_back_to_process_id(self):
+        tui, stdscr = self._make_tui()
+        tui._worker_dataset[0] = "reanalysis-era5-single-levels"
+        tui._worker_dataset_title[0] = ""  # No title
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 6]
+        texts = [c.args[2] for c in calls]
+        assert any("reanalysis-era5-single-levels" in t for t in texts)
+
+    def test_info_panel_shows_request_id_on_row_8(self):
+        tui, stdscr = self._make_tui()
+        tui._worker_request_id[0] = "af1e2306-28c3-test"
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 8]
+        texts = [c.args[2] for c in calls]
+        assert any("af1e2306-28c3-test" in t for t in texts)
+
+    def test_info_panel_shows_checksum_ok(self):
+        tui, stdscr = self._make_tui()
+        tui._worker_checksum[0] = True
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 8]
+        texts = [c.args[2] for c in calls]
+        assert any("Checksum: OK" in t for t in texts)
+
+    def test_info_panel_shows_checksum_mismatch(self):
+        tui, stdscr = self._make_tui()
+        tui._worker_checksum[0] = False
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 8]
+        texts = [c.args[2] for c in calls]
+        assert any("MISMATCH" in t for t in texts)
+
+    def test_info_panel_uses_labels_when_available(self):
+        tui, stdscr = self._make_tui()
+        tui._worker_request_labels[0] = {"Variable": "2m temperature", "Year": "2024"}
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        calls = [
+            c for c in stdscr.addnstr.call_args_list if c.args[0] in (10, 11, 12, 13)
+        ]
+        texts = [c.args[2] for c in calls]
+        # Labels use "Key: Value" format
+        assert any("Variable: 2m temperature" in t for t in texts)
+
+    def test_info_panel_falls_back_to_raw_params(self):
+        tui, stdscr = self._make_tui()
+        tui._worker_request_labels[0] = None
+        tui._worker_request_params[0] = {"variable": "2m_temperature"}
+        with _mock_curses():
+            tui._draw_info_panel(120)
+        calls = [
+            c for c in stdscr.addnstr.call_args_list if c.args[0] in (10, 11, 12, 13)
+        ]
+        texts = [c.args[2] for c in calls]
+        assert any("variable=2m_temperature" in t for t in texts)
+
+
+class TestQoSStatusLine:
+    """Tests for QoS data in the status line."""
+
+    def _make_tui(self, num_workers=2, height=30, width=120):
+        tui = CursesTUI(num_workers=num_workers)
+        stdscr = _mock_stdscr(height, width)
+        tui._stdscr = stdscr
+        tui._last_size = (height, width)
+        return tui, stdscr
+
+    def test_qos_prepended_to_status_line(self):
+        tui, stdscr = self._make_tui()
+        tui._qos_queued = 5220
+        tui._qos_running = 400
+        tui._qos_limit = 400
+        tui._status_line = "Downloading 20 files"
+        with _mock_curses():
+            tui._draw_progress_bar(30, 120)
+        status_row = 29  # height - 1
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == status_row]
+        texts = [c.args[2] for c in calls]
+        assert any("5220 queued" in t for t in texts)
+        assert any("400/400 running" in t for t in texts)
+        assert any("Downloading 20 files" in t for t in texts)
+
+    def test_no_qos_when_zeros(self):
+        tui, stdscr = self._make_tui()
+        tui._qos_queued = 0
+        tui._qos_running = 0
+        tui._qos_limit = 0
+        tui._status_line = "Downloading"
+        with _mock_curses():
+            tui._draw_progress_bar(30, 120)
+        status_row = 29
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == status_row]
+        texts = [c.args[2] for c in calls]
+        assert not any("CDS Server" in t for t in texts)
+
+
+class TestChecksumDialog:
+    """Tests for the checksum dialog view mode."""
+
+    def _make_tui(self, num_workers=3, height=30, width=120):
+        tui = CursesTUI(num_workers=num_workers)
+        stdscr = _mock_stdscr(height, width)
+        tui._stdscr = stdscr
+        tui._last_size = (height, width)
+        return tui, stdscr
+
+    def test_handle_checksum_key_not_in_dialog(self):
+        tui, _ = self._make_tui()
+        assert tui._view_mode == "table"
+        result = tui.handle_checksum_key(ord("c"))
+        assert result is False
+
+    def test_handle_checksum_key_continue(self):
+        tui, _ = self._make_tui()
+        tui._view_mode = "checksum"
+        tui._checksum_dialog_worker = 0
+        with _mock_curses():
+            result = tui.handle_checksum_key(ord("c"))
+        assert result is True
+        assert tui._checksum_dialog_result == "continue"
+        assert tui._view_mode == "table"
+
+    def test_handle_checksum_key_retry(self):
+        tui, _ = self._make_tui()
+        tui._view_mode = "checksum"
+        tui._checksum_dialog_worker = 0
+        with _mock_curses():
+            result = tui.handle_checksum_key(ord("r"))
+        assert result is True
+        assert tui._checksum_dialog_result == "retry"
+        assert tui._view_mode == "table"
+
+    def test_handle_checksum_key_other(self):
+        tui, _ = self._make_tui()
+        tui._view_mode = "checksum"
+        tui._checksum_dialog_worker = 0
+        with _mock_curses():
+            result = tui.handle_checksum_key(ord("x"))
+        assert result is False
+        assert tui._view_mode == "checksum"
+
+    def test_do_refresh_checksum_view(self):
+        tui, stdscr = self._make_tui()
+        tui._view_mode = "checksum"
+        tui._checksum_dialog_worker = 0
+        tui._checksum_dialog_expected = "abc123"
+        tui._worker_filename[0] = "test.grib"
+        tui._last_size = (0, 0)
+        with (
+            _mock_curses(),
+            patch.object(tui, "_draw_checksum_dialog") as dcd,
+        ):
+            tui._do_refresh()
+            dcd.assert_called_once()

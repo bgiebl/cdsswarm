@@ -55,10 +55,10 @@ def _format_size(nbytes: int) -> str:
 class CursesTUI:
     """Terminal UI showing an htop-style worker table with a progress bar."""
 
-    MIN_HEIGHT = 17
+    MIN_HEIGHT = 19
     MIN_WIDTH = 40
     PROGRESS_ROWS = 2
-    HEADER_ROWS = 14  # title + info panel box (12 rows) + column headers
+    HEADER_ROWS = 16  # title + info panel box (14 rows) + column headers
     _INFO_PANEL_PARAM_LINES = 4
 
     _STATUS_COLORS = {
@@ -72,6 +72,7 @@ class CursesTUI:
     # Fixed column widths
     _COL_W = 4
     _COL_STATUS = 12
+    _COL_PROG = 6
     _COL_FILENAME = 20
     _COL_STARTED = 10
     _COL_ELAPSED = 10
@@ -109,8 +110,29 @@ class CursesTUI:
         self._worker_request_params: list[dict] = [{}] * num_workers
         self._worker_target: list[str] = [""] * num_workers
 
+        # Metadata state
+        self._worker_server_progress: list[int | None] = [None] * num_workers
+        self._worker_file_size: list[int | None] = [None] * num_workers
+        self._worker_checksum: list[bool | None] = [None] * num_workers
+        self._worker_server_created: list[str | None] = [None] * num_workers
+        self._worker_server_started: list[str | None] = [None] * num_workers
+        self._worker_server_finished: list[str | None] = [None] * num_workers
+        self._worker_dataset_title: list[str] = [""] * num_workers
+        self._worker_request_labels: list[dict | None] = [None] * num_workers
+
+        # QoS data
+        self._qos_queued: int = 0
+        self._qos_running: int = 0
+        self._qos_limit: int = 0
+
+        # Checksum dialog state
+        self._checksum_dialog_worker: int | None = None
+        self._checksum_dialog_expected: str = ""
+        self._checksum_dialog_result: str | None = None  # "continue" or "retry"
+        self._checksum_dialog_event: threading.Event = threading.Event()
+
         # Log/params view state
-        self._view_mode: str = "table"  # "table", "logs", or "params"
+        self._view_mode: str = "table"  # "table", "logs", "params", or "checksum"
         self._log_scroll: int = 0
         self._params_scroll: int = 0
 
@@ -153,7 +175,10 @@ class CursesTUI:
         scr = self._stdscr
         scr.move(0, 0)
         scr.clrtoeol()
-        if self._view_mode == "logs":
+        if self._view_mode == "checksum":
+            hints = "[c] continue  [r] retry"
+            title = " Checksum Verification"
+        elif self._view_mode == "logs":
             wid = self._selected_worker
             fname = self._worker_filename[wid] or "—"
             hints = "[Esc] back  [↑/↓] scroll  [PgUp/PgDn] page  [q] quit"
@@ -176,7 +201,7 @@ class CursesTUI:
             )
 
     def _draw_info_panel(self, width):
-        """Draw the info panel for the selected worker (rows 1-12) with box drawing."""
+        """Draw the info panel for the selected worker (rows 1-14) with box drawing."""
         scr = self._stdscr
         wid = self._selected_worker
         info_attr = 0
@@ -189,6 +214,8 @@ class CursesTUI:
         dataset = self._worker_dataset[wid] or "—"
         target = self._worker_target[wid] or "—"
         params = self._worker_request_params[wid]
+        dataset_title = self._worker_dataset_title[wid]
+        labels = self._worker_request_labels[wid]
 
         def _hline(row, left, right, junctions=None):
             chars = list("─" * inner_w)
@@ -211,9 +238,25 @@ class CursesTUI:
         # Build content texts to find separator positions
         worker_badge = f" Worker {wid} "
         row2_text = f"{worker_badge} │ Type: {filetype} │ Filename: {filename}"
-        row6_text = f" Request ID: {request_id} │ Dataset: {dataset}"
         row2_seps = [i for i, ch in enumerate(row2_text) if ch == "│"]
-        row6_seps = [i for i, ch in enumerate(row6_text) if ch == "│"]
+
+        # Row 8: Queued wait time + Request ID (or checksum result)
+        queue_wait = self._format_queue_wait(wid)
+        checksum = self._worker_checksum[wid]
+        if checksum is not None:
+            if checksum:
+                left_info = "Checksum: OK ✓"
+            else:
+                left_info = "Checksum: MISMATCH ✗"
+        elif queue_wait:
+            left_info = f"Queued: {queue_wait}"
+        else:
+            left_info = ""
+        if left_info:
+            row8_text = f" {left_info} │ Request ID: {request_id}"
+        else:
+            row8_text = f" Request ID: {request_id}"
+        row8_seps = [i for i, ch in enumerate(row8_text) if ch == "│"]
 
         # Row 1: top border with ┬ at row 2's separator positions
         _hline(1, "┌", "┐", [(p, "┬") for p in row2_seps])
@@ -235,27 +278,47 @@ class CursesTUI:
         dest_dir = os.path.dirname(target) if target != "—" else "—"
         _content(4, f" Destination: {dest_dir}")
 
-        # Row 5: divider with ┬ for row 6
-        _hline(5, "├", "┤", [(p, "┬") for p in row6_seps])
+        # Row 5: divider
+        _hline(5, "├", "┤")
 
-        # Row 6: Request ID, Dataset
-        _content(6, row6_text)
+        # Row 6: Dataset title (human-readable) or processID
+        ds_display = dataset_title if dataset_title else dataset
+        _content(6, f" Dataset: {ds_display}")
 
-        # Row 7: divider with ┴ from row 6
-        _hline(7, "├", "┤", [(p, "┴") for p in row6_seps])
+        # Row 7: divider with ┬ for row 8
+        _hline(7, "├", "┤", [(p, "┬") for p in row8_seps])
 
-        # Rows 8-11: Params (up to 4 lines, ▼ if truncated)
-        if params:
-            param_str = "Params: " + ", ".join(f"{k}={v}" for k, v in params.items())
+        # Row 8: Queue wait / Checksum + Request ID
+        _content(8, row8_text)
+        # Color the checksum badge
+        if checksum is not None:
+            badge_text = "Checksum: OK ✓" if checksum else "Checksum: MISMATCH ✗"
+            badge_color = (
+                curses.color_pair(_CP_STATUS_SUCCESS)
+                if checksum
+                else curses.color_pair(_CP_STATUS_FAILED)
+            )
+            scr.addnstr(
+                8, 2, badge_text, min(len(badge_text), inner_w - 1), badge_color
+            )
+
+        # Row 9: divider with ┴ from row 8
+        _hline(9, "├", "┤", [(p, "┴") for p in row8_seps])
+
+        # Rows 10-13: Params (human-readable labels if available, else raw)
+        if labels:
+            param_str = ", ".join(f"{k}: {v}" for k, v in labels.items())
+        elif params:
+            param_str = ", ".join(f"{k}={v}" for k, v in params.items())
         else:
-            param_str = "Params: —"
+            param_str = "—"
 
         line_width = max(10, inner_w - 1)
         wrapped = textwrap.wrap(param_str, width=line_width) or [param_str]
         truncated = len(wrapped) > self._INFO_PANEL_PARAM_LINES
 
         for i in range(self._INFO_PANEL_PARAM_LINES):
-            row = 8 + i
+            row = 10 + i
             if i < len(wrapped):
                 text = f" {wrapped[i]}"
                 if truncated and i == self._INFO_PANEL_PARAM_LINES - 1:
@@ -269,15 +332,15 @@ class CursesTUI:
             badge = " [a] show all "
             badge_col = max(2, 1 + inner_w - len(badge))
             scr.addnstr(
-                11,
+                13,
                 badge_col,
                 badge,
                 min(len(badge), box_w - badge_col),
                 curses.color_pair(_CP_HEADER) | curses.A_BOLD,
             )
 
-        # Row 12: bottom border (separator before table)
-        _hline(12, "└", "┘")
+        # Row 14: bottom border
+        _hline(14, "└", "┘")
 
     def _draw_column_headers(self, width):
         scr = self._stdscr
@@ -303,17 +366,19 @@ class CursesTUI:
         fixed = (
             self._COL_W
             + self._COL_STATUS
+            + self._COL_PROG
             + self._COL_FILENAME
             + self._COL_STARTED
             + self._COL_ELAPSED
             + self._COL_SIZE
             + self._COL_DL_PCT
-            + 7  # 7 separators
+            + 8  # 8 separators
         )
         req_id_width = max(8, width - fixed)
         return [
             ("W", self._COL_W),
             ("Status", self._COL_STATUS),
+            ("Prog", self._COL_PROG),
             ("Filename", self._COL_FILENAME),
             ("Started", self._COL_STARTED),
             ("Elapsed", self._COL_ELAPSED),
@@ -362,6 +427,7 @@ class CursesTUI:
         indicator = "▸" if is_selected else " "
         worker_str = f"{indicator}{wid}"
         cds_status = self._worker_cds_status[wid] or "idle"
+        prog = self._format_server_progress(wid)
         filename = self._worker_filename[wid] or "—"
         started = self._format_start_time(wid)
         elapsed = self._format_elapsed_time(wid)
@@ -377,6 +443,7 @@ class CursesTUI:
         values = [
             worker_str,
             cds_status,
+            prog,
             filename,
             started,
             elapsed,
@@ -482,6 +549,61 @@ class CursesTUI:
             scr.move(screen_row, 0)
             scr.clrtoeol()
 
+    def _draw_checksum_dialog(self, height, width):
+        """Draw the fullscreen checksum mismatch dialog."""
+        scr = self._stdscr
+        wid = self._checksum_dialog_worker
+        if wid is None:
+            return
+
+        fname = self._worker_filename[wid] or "—"
+        expected = self._checksum_dialog_expected
+
+        # Compute actual checksum for display
+        target = self._worker_target[wid]
+        try:
+            from ._cds_metadata import compute_md5
+
+            actual = compute_md5(target) if target else "?"
+        except Exception:
+            actual = "?"
+
+        # Dialog dimensions
+        dialog_w = min(60, width - 4)
+        dialog_h = 10
+        start_y = max(0, (height - dialog_h) // 2)
+        start_x = max(0, (width - dialog_w) // 2)
+        inner_w = dialog_w - 2
+
+        # Clear screen
+        for row in range(height):
+            scr.move(row, 0)
+            scr.clrtoeol()
+
+        def _hline(row, left, right):
+            line = left + "─" * inner_w + right
+            scr.addnstr(row, start_x, line[:dialog_w], dialog_w)
+
+        def _content(row, text, attr=0):
+            padded = text[:inner_w].ljust(inner_w)
+            line = "│" + padded + "│"
+            scr.addnstr(row, start_x, line[:dialog_w], dialog_w, attr)
+
+        _hline(start_y, "┌", "┐")
+        _content(
+            start_y + 1,
+            "  CHECKSUM MISMATCH",
+            curses.color_pair(_CP_STATUS_FAILED) | curses.A_BOLD,
+        )
+        _content(start_y + 2, "")
+        _content(start_y + 3, f"  Worker {wid}: {fname}")
+        _content(start_y + 4, f"  Expected: {expected}")
+        _content(start_y + 5, f"  Got:      {actual}")
+        _content(start_y + 6, "")
+        _content(start_y + 7, "  [c] Continue and ignore")
+        _content(start_y + 8, "  [r] Retry download (Recommended)", curses.A_BOLD)
+        _hline(start_y + 9, "└", "┘")
+
     def _draw_progress_bar(self, height, width):
         scr = self._stdscr
         bar_row = height - 2
@@ -518,8 +640,18 @@ class CursesTUI:
         scr.addnstr(bar_row, 0, text, width - 1, curses.color_pair(_CP_PROGRESS))
         scr.move(status_row, 0)
         scr.clrtoeol()
-        if self._status_line:
-            scr.addnstr(status_row, 0, " " + self._status_line[: width - 2], width - 1)
+        status = self._status_line
+        if self._qos_queued > 0 or self._qos_running > 0:
+            qos_text = (
+                f"CDS Server: {self._qos_queued} queued | "
+                f"{self._qos_running}/{self._qos_limit} running"
+            )
+            if status:
+                status = f"{qos_text} | {status}"
+            else:
+                status = qos_text
+        if status:
+            scr.addnstr(status_row, 0, " " + status[: width - 2], width - 1)
 
     # -- Formatting helpers --
 
@@ -550,6 +682,10 @@ class CursesTUI:
     def _format_dl_size(self, wid):
         total = self._worker_dl_total[wid]
         if total <= 0:
+            # Fall back to file_size from API metadata
+            fs = self._worker_file_size[wid]
+            if fs and fs > 0:
+                return _format_size(fs)
             return "—"
         return _format_size(total)
 
@@ -559,6 +695,33 @@ class CursesTUI:
             return "—"
         pct = int(self._worker_dl_bytes[wid] * 100 / total)
         return f"{pct}%"
+
+    def _format_server_progress(self, wid):
+        prog = self._worker_server_progress[wid]
+        if prog is None:
+            return "---"
+        return f"{prog}%"
+
+    def _format_queue_wait(self, wid):
+        """Format the queue wait time (server_started - server_created or now - created)."""
+        created = self._worker_server_created[wid]
+        if not created:
+            return ""
+        try:
+            from datetime import datetime, timezone
+
+            created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            started = self._worker_server_started[wid]
+            if started:
+                end_dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            else:
+                end_dt = datetime.now(timezone.utc)
+            delta = (end_dt - created_dt).total_seconds()
+            if delta < 0:
+                return ""
+            return _format_eta(delta)
+        except Exception:
+            return ""
 
     # -- Input handling methods (called from main thread) --
 
@@ -763,6 +926,86 @@ class CursesTUI:
                 self._worker_dl_total[worker_id] = total_bytes
                 self._do_refresh()
 
+    def set_worker_server_progress(self, worker_id, progress):
+        with self._lock:
+            if 0 <= worker_id < self._num_workers:
+                self._worker_server_progress[worker_id] = progress
+                self._do_refresh()
+
+    def set_worker_file_size(self, worker_id, file_size):
+        with self._lock:
+            if 0 <= worker_id < self._num_workers:
+                self._worker_file_size[worker_id] = file_size
+                # Also populate dl_total if not already set by tqdm
+                if self._worker_dl_total[worker_id] <= 0:
+                    self._worker_dl_total[worker_id] = file_size
+                self._do_refresh()
+
+    def set_worker_checksum_result(self, worker_id, passed):
+        with self._lock:
+            if 0 <= worker_id < self._num_workers:
+                self._worker_checksum[worker_id] = passed
+                self._do_refresh()
+
+    def set_worker_server_timestamps(self, worker_id, created, started, finished):
+        with self._lock:
+            if 0 <= worker_id < self._num_workers:
+                self._worker_server_created[worker_id] = created
+                self._worker_server_started[worker_id] = started
+                self._worker_server_finished[worker_id] = finished
+                self._do_refresh()
+
+    def set_worker_dataset_title(self, worker_id, title):
+        with self._lock:
+            if 0 <= worker_id < self._num_workers:
+                self._worker_dataset_title[worker_id] = title
+                self._do_refresh()
+
+    def set_worker_request_labels(self, worker_id, labels):
+        with self._lock:
+            if 0 <= worker_id < self._num_workers:
+                self._worker_request_labels[worker_id] = labels
+                self._do_refresh()
+
+    def set_qos_data(self, queued, running, limit):
+        with self._lock:
+            self._qos_queued = queued
+            self._qos_running = running
+            self._qos_limit = limit
+            self._do_refresh()
+
+    def show_checksum_dialog(self, worker_id, expected):
+        """Open checksum dialog and block until user decides. Called from worker thread."""
+        with self._lock:
+            self._checksum_dialog_worker = worker_id
+            self._checksum_dialog_expected = expected
+            self._checksum_dialog_result = None
+            self._checksum_dialog_event.clear()
+            self._view_mode = "checksum"
+            self._do_refresh()
+        # Block until user presses c or r
+        self._checksum_dialog_event.wait()
+        return self._checksum_dialog_result
+
+    def handle_checksum_key(self, key):
+        """Handle key press in checksum dialog. Returns True if handled."""
+        with self._lock:
+            if self._view_mode != "checksum":
+                return False
+            if key == ord("c"):
+                self._checksum_dialog_result = "continue"
+                self._view_mode = "table"
+                self._checksum_dialog_event.set()
+                self._do_refresh()
+                return True
+            elif key == ord("r"):
+                self._checksum_dialog_result = "retry"
+                self._view_mode = "table"
+                self._checksum_dialog_event.set()
+                self._do_refresh()
+                return True
+            return False
+
     def append_worker_log(self, worker_id, message):
         with self._lock:
             if 0 <= worker_id < self._num_workers:
@@ -778,6 +1021,14 @@ class CursesTUI:
                 self._worker_dl_bytes[worker_id] = 0
                 self._worker_dl_total[worker_id] = 0
                 self._worker_filename[worker_id] = ""
+                self._worker_server_progress[worker_id] = None
+                self._worker_file_size[worker_id] = None
+                self._worker_checksum[worker_id] = None
+                self._worker_server_created[worker_id] = None
+                self._worker_server_started[worker_id] = None
+                self._worker_server_finished[worker_id] = None
+                self._worker_dataset_title[worker_id] = ""
+                self._worker_request_labels[worker_id] = None
 
     def update_progress(self, completed, total, skipped):
         with self._lock:
@@ -816,7 +1067,9 @@ class CursesTUI:
                 self._stdscr.erase()
                 self._last_size = cur_size
 
-            if self._view_mode == "logs":
+            if self._view_mode == "checksum":
+                self._draw_checksum_dialog(height, width)
+            elif self._view_mode == "logs":
                 self._draw_header(width)
                 log_height = height - self.PROGRESS_ROWS - 1  # 1 for title bar
                 self._draw_log_view(width, log_height)

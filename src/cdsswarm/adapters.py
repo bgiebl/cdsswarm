@@ -41,6 +41,32 @@ class OutputAdapter(ABC):
     def on_task_cancelled(self, worker_id: int):
         pass
 
+    def on_task_server_progress(self, worker_id: int, progress: int):
+        pass
+
+    def on_task_file_size(self, worker_id: int, file_size: int):
+        pass
+
+    def on_task_checksum_result(
+        self, worker_id: int, passed: bool, expected: str
+    ) -> str:
+        """Handle checksum result. Returns 'continue' or 'retry'."""
+        return "continue"
+
+    def on_task_server_timestamps(
+        self, worker_id: int, created: str, started: str, finished: str
+    ):
+        pass
+
+    def on_task_dataset_title(self, worker_id: int, title: str):
+        pass
+
+    def on_task_request_labels(self, worker_id: int, labels: dict):
+        pass
+
+    def on_qos_update(self, queued: int, running: int, limit: int):
+        pass
+
 
 class PlainTextAdapter(OutputAdapter):
     """Simple text output for script/non-interactive mode."""
@@ -70,6 +96,18 @@ class PlainTextAdapter(OutputAdapter):
 
     def on_global_message(self, message):
         self._write(message)
+
+    def on_task_checksum_result(self, worker_id, passed, expected):
+        if not passed:
+            self._write(
+                f"  [worker {worker_id}] WARNING: checksum mismatch "
+                f"(expected {expected})"
+            )
+        return "continue"  # Non-interactive: always continue
+
+    def on_qos_update(self, queued, running, limit):
+        if queued > 0 or running > 0:
+            self._write(f"  CDS Server: {queued} queued | {running}/{limit} running")
 
 
 class CursesAdapter(OutputAdapter):
@@ -115,6 +153,31 @@ class CursesAdapter(OutputAdapter):
     def on_task_cancelled(self, worker_id):
         self._tui.set_worker_cds_status(worker_id, "cancelled")
         self._tui.append_worker_log(worker_id, "Request cancelled")
+
+    def on_task_server_progress(self, worker_id, progress):
+        self._tui.set_worker_server_progress(worker_id, progress)
+
+    def on_task_file_size(self, worker_id, file_size):
+        self._tui.set_worker_file_size(worker_id, file_size)
+
+    def on_task_checksum_result(self, worker_id, passed, expected):
+        self._tui.set_worker_checksum_result(worker_id, passed)
+        if not passed:
+            result = self._tui.show_checksum_dialog(worker_id, expected)
+            return result or "continue"
+        return "continue"
+
+    def on_task_server_timestamps(self, worker_id, created, started, finished):
+        self._tui.set_worker_server_timestamps(worker_id, created, started, finished)
+
+    def on_task_dataset_title(self, worker_id, title):
+        self._tui.set_worker_dataset_title(worker_id, title)
+
+    def on_task_request_labels(self, worker_id, labels):
+        self._tui.set_worker_request_labels(worker_id, labels)
+
+    def on_qos_update(self, queued, running, limit):
+        self._tui.set_qos_data(queued, running, limit)
 
     def on_global_message(self, message):
         self._tui.set_status_line(message)

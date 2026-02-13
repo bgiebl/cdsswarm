@@ -32,6 +32,12 @@ DATASETS = [
     "reanalysis-cerra-single-levels",
 ]
 
+DATASET_TITLES = {
+    "reanalysis-era5-single-levels": "ERA5 hourly data on single levels from 1940 to present",
+    "reanalysis-era5-pressure-levels": "ERA5 hourly data on pressure levels from 1940 to present",
+    "reanalysis-cerra-single-levels": "CERRA sub-daily regional reanalysis data for Europe on single levels from 1984 to present",
+}
+
 VARIABLES = [
     "2m_temperature",
     "10m_u_component_of_wind",
@@ -40,6 +46,15 @@ VARIABLES = [
     "soil_temperature_level_1",
     "surface_net_solar_radiation",
 ]
+
+VARIABLE_LABELS = {
+    "2m_temperature": "2m temperature",
+    "10m_u_component_of_wind": "10m u-component of wind",
+    "total_precipitation": "Total precipitation",
+    "surface_pressure": "Surface pressure",
+    "soil_temperature_level_1": "Soil temperature level 1",
+    "surface_net_solar_radiation": "Surface net solar radiation",
+}
 
 # Heavy request params that exceed 4 lines in the info panel
 HEAVY_PARAMS = {
@@ -86,6 +101,33 @@ HEAVY_PARAMS = {
     "area": [60, -10, 35, 30],
 }
 
+HEAVY_LABELS = {
+    "Product type": "Reanalysis",
+    "Variable": "2m temperature, 10m u-component of wind, 10m v-component of wind, ...",
+    "Pressure level": "1000, 975, 950, 925, 900, 850, 800, 700, 600, 500, 400, 300, 250, 200, 150, 100 hPa",
+    "Year": "2023, 2024",
+    "Month": "January, February, March, April, May, June",
+    "Day": "01 to 31",
+    "Time": "00:00, 06:00, 12:00, 18:00",
+    "Data format": "GRIB",
+    "Sub-region extracted": "N:60° W:-10° S:35° E:30°",
+}
+
+MONTH_NAMES = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+]
+
 
 def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
     """Simulate download activity by driving the TUI directly.
@@ -101,6 +143,9 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
     tui.update_progress(0, num_tasks, 0)
     tui.set_status_line(f"Downloading {num_tasks} files ({num_workers} workers)")
 
+    # Simulate QoS data
+    tui.set_qos_data(random.randint(3000, 6000), random.randint(380, 400), 400)
+
     # Queue of tasks to process
     task_queue = []
     for i in range(num_tasks):
@@ -112,6 +157,7 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
         if i < 3:
             # First 3 tasks get heavy params (>4 lines in info panel)
             request_params = HEAVY_PARAMS
+            request_labels = HEAVY_LABELS
         else:
             variable = random.choice(VARIABLES)
             month = random.randint(1, 12)
@@ -124,8 +170,19 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
                 "time": "00:00",
                 "format": "grib",
             }
+            request_labels = {
+                "Product type": "Reanalysis",
+                "Variable": VARIABLE_LABELS.get(variable, variable),
+                "Year": "2024",
+                "Month": MONTH_NAMES[month - 1],
+                "Day": "01 to 31",
+                "Time": "00:00",
+                "Data format": "GRIB",
+            }
         target = f"/data/downloads/{dataset}/{fname}"
-        task_queue.append((fname, size, request_id, dataset, request_params, target))
+        task_queue.append(
+            (fname, size, request_id, dataset, request_params, request_labels, target)
+        )
 
     active = {}  # worker_id -> state dict
     task_idx = 0
@@ -134,13 +191,19 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
         nonlocal task_idx
         if task_idx >= num_tasks:
             return False
-        fname, size, rid, dataset, params, target = task_queue[task_idx]
+        fname, size, rid, dataset, params, labels, target = task_queue[task_idx]
         task_idx += 1
         tui.clear_worker_log(wid)
         tui.set_worker_filename(wid, fname)
         tui.set_worker_cds_status(wid, "accepted")
         tui.set_worker_request_id(wid, rid)
         tui.set_worker_task_info(wid, dataset, params, target)
+        tui.set_worker_dataset_title(wid, DATASET_TITLES.get(dataset, ""))
+        tui.set_worker_request_labels(wid, labels)
+        tui.set_worker_server_progress(wid, 0)
+        # Simulate server timestamps
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        tui.set_worker_server_timestamps(wid, now, "", "")
         tui.append_worker_log(wid, f"Started: {fname}")
         tui.append_worker_log(wid, f"Request ID is {rid}")
         active[wid] = {
@@ -150,6 +213,7 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
             "dl_bytes": 0,
             "phase": 0,
             "phase_ticks": 0,
+            "server_progress": 0,
         }
         return True
 
@@ -161,6 +225,10 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
         if stop_event.is_set():
             break
 
+        # Periodically update QoS
+        if random.random() < 0.1:
+            tui.set_qos_data(random.randint(3000, 6000), random.randint(380, 400), 400)
+
         for wid in list(active):
             state = active[wid]
             phase = state["phase"]
@@ -171,15 +239,39 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
                 state["phase"] = 1
                 state["phase_ticks"] = 0
                 tui.set_worker_cds_status(wid, "running")
+                # Simulate server started timestamp
+                now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                tui.set_worker_server_timestamps(
+                    wid, tui._worker_server_created[wid] or now, now, ""
+                )
                 tui.append_worker_log(wid, "status has been updated to running")
 
-            elif phase == 1 and state["phase_ticks"] >= random.randint(10, 30):
-                # running -> successful (data ready on server)
-                state["phase"] = 2
-                state["phase_ticks"] = 0
-                tui.set_worker_cds_status(wid, "successful")
-                tui.append_worker_log(wid, "status has been updated to successful")
-                tui.append_worker_log(wid, "Request is completed, starting download")
+            elif phase == 1:
+                # Increment server-side progress
+                state["server_progress"] = min(
+                    100, state["server_progress"] + random.randint(2, 8)
+                )
+                tui.set_worker_server_progress(wid, state["server_progress"])
+
+                if state["server_progress"] >= 100:
+                    # running -> successful (data ready on server)
+                    state["phase"] = 2
+                    state["phase_ticks"] = 0
+                    tui.set_worker_cds_status(wid, "successful")
+                    tui.set_worker_server_progress(wid, 100)
+                    tui.set_worker_file_size(wid, state["size"])
+                    # Simulate server finished timestamp
+                    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    tui.set_worker_server_timestamps(
+                        wid,
+                        tui._worker_server_created[wid] or "",
+                        tui._worker_server_started[wid] or "",
+                        now,
+                    )
+                    tui.append_worker_log(wid, "status has been updated to successful")
+                    tui.append_worker_log(
+                        wid, "Request is completed, starting download"
+                    )
 
             elif phase == 2 and state["phase_ticks"] >= random.randint(2, 5):
                 # successful -> downloading (transfer begins)
@@ -205,6 +297,12 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
                         tui.set_worker_cds_status(wid, "failed")
                         tui.append_worker_log(wid, "Error: connection timeout")
                     else:
+                        # Simulate checksum pass (occasional fail)
+                        if random.random() < 0.05:
+                            tui.set_worker_checksum_result(wid, False)
+                            tui.append_worker_log(wid, "Checksum mismatch!")
+                        else:
+                            tui.set_worker_checksum_result(wid, True)
                         tui.append_worker_log(wid, f"Completed: {state['fname']}")
                     tui.set_worker_finished(wid)
                     tasks_done += 1
@@ -256,6 +354,8 @@ def main():
                     continue
                 if key == -1:
                     tui.refresh()
+                    continue
+                if tui.handle_checksum_key(key):
                     continue
                 if key == ord("q"):
                     stop_event.set()

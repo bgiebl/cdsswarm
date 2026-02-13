@@ -125,6 +125,8 @@ def _run_interactive(
                     # Timeout — refresh to tick the Running column
                     tui.refresh()
                     continue
+                if tui.handle_checksum_key(key):
+                    continue
                 if key == ord("q"):
                     downloader.cancel()
                     tui.set_status_line("Cancelling...")
