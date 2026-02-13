@@ -8,8 +8,10 @@ from unittest.mock import MagicMock, patch
 
 from cdsswarm.tui import (
     CursesTUI,
+    _CP_COL_HEADER,
+    _CP_GREEN_TEXT,
+    _CP_SELECTED_ROW,
     _CP_STATUS_RUNNING,
-    _CP_STATUS_SUCCESS,
     _format_eta,
     _format_size,
 )
@@ -388,7 +390,8 @@ class TestDrawing:
 
     def test_draw_column_headers_at_correct_row(self):
         tui, stdscr = self._make_tui()
-        tui._draw_column_headers(120)
+        with _mock_curses():
+            tui._draw_column_headers(120)
         calls = stdscr.addnstr.call_args_list
         assert len(calls) == 1
         row, col, text, _, attr = calls[0].args
@@ -401,17 +404,22 @@ class TestDrawing:
         assert "Type" not in text
         assert "Finished" not in text
         assert attr & curses.A_BOLD
-        assert attr & curses.A_UNDERLINE
+        # Green background via _CP_COL_HEADER color pair
+        assert attr & (_CP_COL_HEADER << 8)
 
-    def test_draw_column_headers_uses_pipe_separator(self):
+    def test_draw_column_headers_uses_space_separator(self):
         tui, stdscr = self._make_tui()
-        tui._draw_column_headers(120)
+        with _mock_curses():
+            tui._draw_column_headers(120)
         text = stdscr.addnstr.call_args_list[0].args[2]
-        assert "│" in text
+        assert "│" not in text
+        # Columns are separated by spaces, not pipe characters
+        assert "Status" in text and "Filename" in text
 
     def test_draw_table_populates_row_worker_map(self):
         tui, stdscr = self._make_tui(num_workers=3)
-        tui._draw_table(120, available_height=20)
+        with _mock_curses():
+            tui._draw_table(120, available_height=20)
         # 3 workers → 3 entries in row_worker_map
         assert len(tui._row_worker_map) == 3
         # Workers 0,1,2 should be at rows HEADER_ROWS+0, +1, +2
@@ -419,35 +427,38 @@ class TestDrawing:
         assert tui._row_worker_map[tui.HEADER_ROWS + 1] == 1
         assert tui._row_worker_map[tui.HEADER_ROWS + 2] == 2
 
-    def test_draw_table_selected_row_gets_reverse(self):
+    def test_draw_table_selected_row_gets_highlight(self):
         tui, stdscr = self._make_tui(num_workers=2)
         tui._selected_worker = 1
-        tui._draw_table(120, available_height=20)
+        with _mock_curses():
+            tui._draw_table(120, available_height=20)
         # Find addnstr calls for screen_row = HEADER_ROWS + 1 (worker 1)
         selected_row = tui.HEADER_ROWS + 1
         calls_for_selected = [
             c for c in stdscr.addnstr.call_args_list if c.args[0] == selected_row
         ]
-        # At least one call should have A_REVERSE
+        # At least one call should have _CP_SELECTED_ROW color pair
         attrs = [c.args[4] if len(c.args) > 4 else 0 for c in calls_for_selected]
-        assert any(a & curses.A_REVERSE for a in attrs)
+        assert any(a & (_CP_SELECTED_ROW << 8) for a in attrs)
 
-    def test_draw_table_unselected_row_no_reverse(self):
+    def test_draw_table_unselected_row_no_highlight(self):
         tui, stdscr = self._make_tui(num_workers=2)
         tui._selected_worker = 0
-        tui._draw_table(120, available_height=20)
+        with _mock_curses():
+            tui._draw_table(120, available_height=20)
         # Worker 1 is at HEADER_ROWS + 1 and is NOT selected
         unselected_row = tui.HEADER_ROWS + 1
         calls_for_unselected = [
             c for c in stdscr.addnstr.call_args_list if c.args[0] == unselected_row
         ]
         attrs = [c.args[4] if len(c.args) > 4 else 0 for c in calls_for_unselected]
-        assert all(not (a & curses.A_REVERSE) for a in attrs)
+        assert all(not (a & (_CP_SELECTED_ROW << 8)) for a in attrs)
 
     def test_draw_table_selection_indicator(self):
         tui, stdscr = self._make_tui(num_workers=2)
         tui._selected_worker = 0
-        tui._draw_table(120, available_height=20)
+        with _mock_curses():
+            tui._draw_table(120, available_height=20)
         selected_row = tui.HEADER_ROWS
         calls_for_selected = [
             c for c in stdscr.addnstr.call_args_list if c.args[0] == selected_row
@@ -459,7 +470,8 @@ class TestDrawing:
     def test_draw_table_unselected_no_indicator(self):
         tui, stdscr = self._make_tui(num_workers=2)
         tui._selected_worker = 0
-        tui._draw_table(120, available_height=20)
+        with _mock_curses():
+            tui._draw_table(120, available_height=20)
         unselected_row = tui.HEADER_ROWS + 1
         calls_for_unselected = [
             c for c in stdscr.addnstr.call_args_list if c.args[0] == unselected_row
@@ -468,23 +480,25 @@ class TestDrawing:
         assert not any("▸" in t for t in texts)
 
     def test_draw_table_status_badge_color(self):
-        tui, stdscr = self._make_tui(num_workers=1)
-        tui._worker_cds_status[0] = "running"
+        tui, stdscr = self._make_tui(num_workers=2)
+        tui._selected_worker = 0  # Select worker 0
+        tui._worker_cds_status[1] = "running"  # Test color on non-selected worker 1
         with _mock_curses():
             tui._draw_table(120, available_height=20)
-        row = tui.HEADER_ROWS
+        row = tui.HEADER_ROWS + 1  # Worker 1 row
         calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == row]
-        # Find the call that renders the status badge " running "
-        badge_calls = [c for c in calls if "running" in c.args[2] and len(c.args) > 4]
-        assert len(badge_calls) >= 1
-        # The badge should use the _CP_STATUS_RUNNING color pair (mocked as n << 8)
-        badge_attr = badge_calls[0].args[4]
-        assert badge_attr == _CP_STATUS_RUNNING << 8
+        # Find the call that renders the status text with foreground color
+        status_calls = [c for c in calls if "running" in c.args[2] and len(c.args) > 4]
+        assert len(status_calls) >= 1
+        # Status should use the _CP_STATUS_RUNNING color pair (mocked as n << 8)
+        status_attr = status_calls[0].args[4]
+        assert status_attr == _CP_STATUS_RUNNING << 8
 
     def test_draw_table_clears_remaining_rows(self):
         tui, stdscr = self._make_tui(num_workers=2)
         available = 10
-        tui._draw_table(120, available_height=available)
+        with _mock_curses():
+            tui._draw_table(120, available_height=available)
         # move+clrtoeol should be called for all available rows
         move_calls = [c.args for c in stdscr.move.call_args_list]
         # Rows HEADER_ROWS through HEADER_ROWS + available - 1 should all be touched
@@ -495,7 +509,8 @@ class TestDrawing:
     def test_draw_table_shows_filename(self):
         tui, stdscr = self._make_tui(num_workers=1)
         tui._worker_filename[0] = "era5_data.grib"
-        tui._draw_table(120, available_height=10)
+        with _mock_curses():
+            tui._draw_table(120, available_height=10)
         row = tui.HEADER_ROWS
         texts = [c.args[2] for c in stdscr.addnstr.call_args_list if c.args[0] == row]
         assert any("era5_data.grib" in t for t in texts)
@@ -503,47 +518,51 @@ class TestDrawing:
     def test_draw_table_shows_request_id(self):
         tui, stdscr = self._make_tui(num_workers=1)
         tui._worker_request_id[0] = "af1e2306-28c3-4abc"
-        tui._draw_table(120, available_height=10)
+        with _mock_curses():
+            tui._draw_table(120, available_height=10)
         row = tui.HEADER_ROWS
         texts = [c.args[2] for c in stdscr.addnstr.call_args_list if c.args[0] == row]
         assert any("af1e2306" in t for t in texts)
 
     def test_draw_table_finished_elapsed_green(self):
-        """When a worker is finished, Elapsed and DL% columns get green background."""
-        tui, stdscr = self._make_tui(num_workers=1)
-        tui._worker_finish_time[0] = 1000.0  # mark as finished
-        tui._worker_start_time[0] = 900.0
-        tui._worker_dl_bytes[0] = 500
-        tui._worker_dl_total[0] = 1000
+        """When a worker is finished, Elapsed and DL% get green foreground + checkmark."""
+        tui, stdscr = self._make_tui(num_workers=2)
+        tui._selected_worker = 0  # Select worker 0
+        tui._worker_finish_time[1] = 1000.0  # mark worker 1 as finished
+        tui._worker_start_time[1] = 900.0
+        tui._worker_dl_bytes[1] = 500
+        tui._worker_dl_total[1] = 1000
         with _mock_curses():
             tui._draw_table(120, available_height=10)
-        row = tui.HEADER_ROWS
+        row = tui.HEADER_ROWS + 1  # Worker 1 row (non-selected)
         calls = [
             c
             for c in stdscr.addnstr.call_args_list
             if c.args[0] == row and len(c.args) > 4
         ]
-        # Find calls with the green success color pair (mocked as n << 8)
-        green_calls = [c for c in calls if c.args[4] == _CP_STATUS_SUCCESS << 8]
+        # Find calls with the green text color pair (mocked as n << 8)
+        green_calls = [c for c in calls if c.args[4] == _CP_GREEN_TEXT << 8]
         # Should have at least 2: one for Elapsed, one for DL%
         assert len(green_calls) >= 2
         green_texts = [c.args[2] for c in green_calls]
-        # One should contain elapsed time (with m/h), other should contain pct
+        # One should contain elapsed time with checkmark, other pct with checkmark
+        assert any("✓" in t for t in green_texts)
         assert any("%" in t for t in green_texts)
 
     def test_draw_table_unfinished_no_green_elapsed(self):
-        tui, stdscr = self._make_tui(num_workers=1)
-        # Not finished — finish_time is None
-        tui._worker_start_time[0] = 900.0
+        tui, stdscr = self._make_tui(num_workers=2)
+        tui._selected_worker = 0  # Select worker 0
+        # Worker 1 not finished — finish_time is None
+        tui._worker_start_time[1] = 900.0
         with _mock_curses():
             tui._draw_table(120, available_height=10)
-        row = tui.HEADER_ROWS
+        row = tui.HEADER_ROWS + 1  # Worker 1 row (non-selected)
         calls = [
             c
             for c in stdscr.addnstr.call_args_list
             if c.args[0] == row and len(c.args) > 4
         ]
-        green_calls = [c for c in calls if c.args[4] == _CP_STATUS_SUCCESS << 8]
+        green_calls = [c for c in calls if c.args[4] == _CP_GREEN_TEXT << 8]
         assert len(green_calls) == 0
 
     def test_do_refresh_calls_all_draw_methods(self):
@@ -616,7 +635,8 @@ class TestInfoPanel:
         tui._selected_worker = 1
         with _mock_curses():
             tui._draw_info_panel(120)
-        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 1]
+        # Worker badge is on row 2 (row 1 is top border)
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 2]
         texts = [c.args[2] for c in calls]
         assert any("Worker 1" in t for t in texts)
 
@@ -625,8 +645,8 @@ class TestInfoPanel:
         tui._worker_dataset[0] = "reanalysis-era5-single-levels"
         with _mock_curses():
             tui._draw_info_panel(120)
-        # Dataset is on row 5 (Request ID │ Dataset)
-        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 5]
+        # Dataset is on row 6
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 6]
         texts = [c.args[2] for c in calls]
         assert any("reanalysis-era5-single-levels" in t for t in texts)
 
@@ -635,8 +655,10 @@ class TestInfoPanel:
         tui._worker_request_params[0] = {"variable": "2m_temperature", "year": "2024"}
         with _mock_curses():
             tui._draw_info_panel(120)
-        # Params are on rows 7-10
-        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] in (7, 8, 9, 10)]
+        # Params are on rows 8-11
+        calls = [
+            c for c in stdscr.addnstr.call_args_list if c.args[0] in (8, 9, 10, 11)
+        ]
         texts = [c.args[2] for c in calls]
         assert any("variable=2m_temperature" in t for t in texts)
         assert any("year=2024" in t for t in texts)
@@ -646,8 +668,8 @@ class TestInfoPanel:
         tui._worker_target[0] = "/data/downloads/era5_t2m.grib"
         with _mock_curses():
             tui._draw_info_panel(120)
-        # Destination is on row 3
-        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 3]
+        # Destination is on row 4
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 4]
         texts = [c.args[2] for c in calls]
         assert any("/data/downloads" in t for t in texts)
 
@@ -656,8 +678,8 @@ class TestInfoPanel:
         tui._worker_filename[0] = "era5_data.grib"
         with _mock_curses():
             tui._draw_info_panel(120)
-        # Filetype (uppercase) is on row 1
-        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 1]
+        # Filetype (uppercase) is on row 2 (content row with Worker/Type/Filename)
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 2]
         texts = [c.args[2] for c in calls]
         assert any("GRIB" in t for t in texts)
 
@@ -668,7 +690,8 @@ class TestInfoPanel:
         tui._selected_worker = 0
         with _mock_curses():
             tui._draw_info_panel(120)
-        calls_0 = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 1]
+        # Filename is on row 2
+        calls_0 = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 2]
         texts_0 = [c.args[2] for c in calls_0]
         assert any("file_a.grib" in t for t in texts_0)
 
@@ -676,7 +699,7 @@ class TestInfoPanel:
         tui._selected_worker = 1
         with _mock_curses():
             tui._draw_info_panel(120)
-        calls_1 = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 1]
+        calls_1 = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 2]
         texts_1 = [c.args[2] for c in calls_1]
         assert any("file_b.nc" in t for t in texts_1)
 
@@ -871,7 +894,7 @@ class TestMouseHandling:
 
 class TestEnsureSelectedVisible:
     def test_scroll_down_when_selected_below_view(self):
-        # height=20, HEADER_ROWS=12, PROGRESS_ROWS=2 → available=6
+        # height=20, HEADER_ROWS=14, PROGRESS_ROWS=2 → available=4
         tui = CursesTUI(num_workers=10)
         tui._stdscr = _mock_stdscr(height=20, width=120)
         tui._table_scroll = 0
@@ -904,7 +927,8 @@ class TestTableScroll:
         tui._stdscr = _mock_stdscr(height=30, width=120)
         tui._table_scroll = 100  # way too high
         tui._last_size = (30, 120)
-        tui._draw_table(120, available_height=20)
+        with _mock_curses():
+            tui._draw_table(120, available_height=20)
         # After draw, scroll should be clamped (3 rows, 20 available → max_scroll=0)
         assert tui._table_scroll == 0
 
@@ -913,5 +937,6 @@ class TestTableScroll:
         tui._stdscr = _mock_stdscr(height=30, width=120)
         tui._table_scroll = -5
         tui._last_size = (30, 120)
-        tui._draw_table(120, available_height=20)
+        with _mock_curses():
+            tui._draw_table(120, available_height=20)
         assert tui._table_scroll >= 0

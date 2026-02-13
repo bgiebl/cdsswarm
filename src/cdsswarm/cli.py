@@ -140,8 +140,13 @@ def _run_interactive(
                         tui.close_log_view()
                     else:
                         tui.open_log_view()
+                elif key == ord("a"):
+                    if tui._view_mode == "params":
+                        tui.close_fullscreen_view()
+                    elif tui._view_mode == "table":
+                        tui.open_params_view()
                 elif key == 27:  # Escape
-                    tui.close_log_view()
+                    tui.close_fullscreen_view()
                 elif key == curses.KEY_PPAGE:
                     tui.page_up()
                 elif key == curses.KEY_NPAGE:

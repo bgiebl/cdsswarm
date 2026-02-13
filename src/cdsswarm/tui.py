@@ -21,7 +21,9 @@ _CP_STATUS_SUCCESS = 9
 _CP_WORKER_LABEL = 10
 _CP_STATUS_CANCELLED = 11
 _CP_HEADER = 12
-_CP_WORKER_INDIGO = 13
+_CP_WORKER_BADGE = 13
+_CP_COL_HEADER = 14
+_CP_SELECTED_ROW = 15
 
 
 def _format_eta(seconds: float) -> str:
@@ -53,10 +55,10 @@ def _format_size(nbytes: int) -> str:
 class CursesTUI:
     """Terminal UI showing an htop-style worker table with a progress bar."""
 
-    MIN_HEIGHT = 15
+    MIN_HEIGHT = 17
     MIN_WIDTH = 40
     PROGRESS_ROWS = 2
-    HEADER_ROWS = 12  # title + info panel (10 rows) + column headers
+    HEADER_ROWS = 14  # title + info panel box (12 rows) + column headers
     _INFO_PANEL_PARAM_LINES = 4
 
     _STATUS_COLORS = {
@@ -107,9 +109,10 @@ class CursesTUI:
         self._worker_request_params: list[dict] = [{}] * num_workers
         self._worker_target: list[str] = [""] * num_workers
 
-        # Log view state
-        self._view_mode: str = "table"  # "table" or "logs"
+        # Log/params view state
+        self._view_mode: str = "table"  # "table", "logs", or "params"
         self._log_scroll: int = 0
+        self._params_scroll: int = 0
 
     def start(self, stdscr):
         self._stdscr = stdscr
@@ -128,19 +131,20 @@ class CursesTUI:
         curses.init_pair(_CP_BORDER, curses.COLOR_CYAN, -1)
         curses.init_pair(_CP_PROGRESS, curses.COLOR_YELLOW, -1)
         curses.init_pair(_CP_STATUS_LABEL, curses.COLOR_BLACK, curses.COLOR_WHITE)
-        curses.init_pair(_CP_STATUS_FAILED, curses.COLOR_WHITE, curses.COLOR_RED)
+        curses.init_pair(_CP_STATUS_FAILED, curses.COLOR_RED, -1)
+        curses.init_pair(_CP_STATUS_SUCCESS, curses.COLOR_GREEN, -1)
+        curses.init_pair(_CP_STATUS_CANCELLED, curses.COLOR_MAGENTA, -1)
+        curses.init_pair(_CP_STATUS_RUNNING, curses.COLOR_YELLOW, -1)
+        curses.init_pair(_CP_COL_HEADER, curses.COLOR_BLACK, curses.COLOR_GREEN)
         if curses.COLORS >= 256:
-            curses.init_pair(_CP_STATUS_ACCEPTED, curses.COLOR_BLACK, 208)
-            curses.init_pair(_CP_WORKER_INDIGO, 63, -1)
+            curses.init_pair(_CP_STATUS_ACCEPTED, 208, -1)
+            curses.init_pair(_CP_WORKER_BADGE, curses.COLOR_WHITE, 39)
+            curses.init_pair(_CP_SELECTED_ROW, curses.COLOR_WHITE, 24)
         else:
-            curses.init_pair(
-                _CP_STATUS_ACCEPTED, curses.COLOR_BLACK, curses.COLOR_YELLOW
-            )
-            curses.init_pair(_CP_WORKER_INDIGO, curses.COLOR_BLUE, -1)
-        curses.init_pair(_CP_STATUS_SUCCESS, curses.COLOR_BLACK, curses.COLOR_GREEN)
+            curses.init_pair(_CP_STATUS_ACCEPTED, curses.COLOR_YELLOW, -1)
+            curses.init_pair(_CP_WORKER_BADGE, curses.COLOR_WHITE, curses.COLOR_CYAN)
+            curses.init_pair(_CP_SELECTED_ROW, curses.COLOR_WHITE, curses.COLOR_BLUE)
         curses.init_pair(_CP_WORKER_LABEL, curses.COLOR_WHITE, curses.COLOR_CYAN)
-        curses.init_pair(_CP_STATUS_CANCELLED, curses.COLOR_WHITE, curses.COLOR_MAGENTA)
-        curses.init_pair(_CP_STATUS_RUNNING, curses.COLOR_BLACK, curses.COLOR_YELLOW)
         curses.init_pair(_CP_HEADER, curses.COLOR_WHITE, curses.COLOR_BLUE)
 
     # -- Drawing methods --
@@ -154,6 +158,10 @@ class CursesTUI:
             fname = self._worker_filename[wid] or "—"
             hints = "[Esc] back  [↑/↓] scroll  [PgUp/PgDn] page  [q] quit"
             title = f" Worker {wid} — {fname}"
+        elif self._view_mode == "params":
+            wid = self._selected_worker
+            hints = "[Esc] back  [↑/↓] scroll  [PgUp/PgDn] page  [q] quit"
+            title = f" Worker {wid} — Parameters"
         else:
             hints = "[q] quit  [↑/↓] select  [Enter] logs"
             title = f" {self._title}"
@@ -167,18 +175,13 @@ class CursesTUI:
                 0, hint_col, hints, width - hint_col - 1, curses.color_pair(_CP_HEADER)
             )
 
-    def _draw_divider(self, row, width):
-        """Draw a horizontal divider line using box-drawing characters."""
-        scr = self._stdscr
-        scr.move(row, 0)
-        scr.clrtoeol()
-        line = "─" * (width - 1)
-        scr.addnstr(row, 0, line, width - 1, curses.A_DIM)
-
     def _draw_info_panel(self, width):
-        """Draw the info panel for the selected worker (rows 1-10)."""
+        """Draw the info panel for the selected worker (rows 1-12) with box drawing."""
         scr = self._stdscr
         wid = self._selected_worker
+        info_attr = 0
+        box_w = width - 1
+        inner_w = max(1, box_w - 2)
 
         filename = self._worker_filename[wid] or "—"
         filetype = self._format_filetype(wid).upper()
@@ -187,72 +190,94 @@ class CursesTUI:
         target = self._worker_target[wid] or "—"
         params = self._worker_request_params[wid]
 
-        # Row 1: Worker N │ Type: GRIB │ filename
-        worker_label = f" Worker {wid}"
-        rest_of_row1 = f" │ Type: {filetype} │ {filename}"
-        scr.move(1, 0)
-        scr.clrtoeol()
-        # Draw worker label in indigo
+        def _hline(row, left, right, junctions=None):
+            chars = list("─" * inner_w)
+            if junctions:
+                for pos, ch in junctions:
+                    if 0 <= pos < inner_w:
+                        chars[pos] = ch
+            line = left + "".join(chars) + right
+            scr.move(row, 0)
+            scr.clrtoeol()
+            scr.addnstr(row, 0, line[:box_w], box_w, info_attr)
+
+        def _content(row, text, attr=0):
+            padded = text[:inner_w].ljust(inner_w)
+            line = "│" + padded + "│"
+            scr.move(row, 0)
+            scr.clrtoeol()
+            scr.addnstr(row, 0, line[:box_w], box_w, info_attr | attr)
+
+        # Build content texts to find separator positions
+        worker_badge = f" Worker {wid} "
+        row2_text = f"{worker_badge} │ Type: {filetype} │ Filename: {filename}"
+        row6_text = f" Request ID: {request_id} │ Dataset: {dataset}"
+        row2_seps = [i for i, ch in enumerate(row2_text) if ch == "│"]
+        row6_seps = [i for i, ch in enumerate(row6_text) if ch == "│"]
+
+        # Row 1: top border with ┬ at row 2's separator positions
+        _hline(1, "┌", "┐", [(p, "┬") for p in row2_seps])
+
+        # Row 2: Worker badge, Type, Filename
+        _content(2, row2_text)
         scr.addnstr(
+            2,
             1,
-            0,
-            worker_label,
-            min(len(worker_label), width - 1),
-            curses.color_pair(_CP_WORKER_INDIGO) | curses.A_BOLD,
+            worker_badge,
+            min(len(worker_badge), inner_w),
+            curses.color_pair(_CP_WORKER_BADGE) | curses.A_BOLD,
         )
-        col_after = len(worker_label)
-        if col_after < width - 1:
-            scr.addnstr(1, col_after, rest_of_row1, width - col_after - 1)
 
-        # Row 2: divider
-        self._draw_divider(2, width)
+        # Row 3: divider with ┴ from row 2
+        _hline(3, "├", "┤", [(p, "┴") for p in row2_seps])
 
-        # Row 3: Destination
+        # Row 4: Destination
         dest_dir = os.path.dirname(target) if target != "—" else "—"
-        row3 = f" Destination: {dest_dir}"
-        scr.move(3, 0)
-        scr.clrtoeol()
-        scr.addnstr(3, 0, row3[: width - 1], width - 1)
+        _content(4, f" Destination: {dest_dir}")
 
-        # Row 4: divider
-        self._draw_divider(4, width)
+        # Row 5: divider with ┬ for row 6
+        _hline(5, "├", "┤", [(p, "┬") for p in row6_seps])
 
-        # Row 5: Request ID │ Dataset
-        row5 = f" Request ID: {request_id} │ Dataset: {dataset}"
-        scr.move(5, 0)
-        scr.clrtoeol()
-        scr.addnstr(5, 0, row5[: width - 1], width - 1)
+        # Row 6: Request ID, Dataset
+        _content(6, row6_text)
 
-        # Row 6: divider
-        self._draw_divider(6, width)
+        # Row 7: divider with ┴ from row 6
+        _hline(7, "├", "┤", [(p, "┴") for p in row6_seps])
 
-        # Rows 7-10: Params (up to 4 lines, ▼ if truncated)
+        # Rows 8-11: Params (up to 4 lines, ▼ if truncated)
         if params:
             param_str = "Params: " + ", ".join(f"{k}={v}" for k, v in params.items())
         else:
             param_str = "Params: —"
 
-        line_width = max(10, width - 2)  # 1 char margin each side
-        wrapped = textwrap.wrap(param_str, width=line_width)
-        if not wrapped:
-            wrapped = [param_str]
+        line_width = max(10, inner_w - 1)
+        wrapped = textwrap.wrap(param_str, width=line_width) or [param_str]
         truncated = len(wrapped) > self._INFO_PANEL_PARAM_LINES
 
         for i in range(self._INFO_PANEL_PARAM_LINES):
-            row = 7 + i
-            scr.move(row, 0)
-            scr.clrtoeol()
+            row = 8 + i
             if i < len(wrapped):
-                line = f" {wrapped[i]}"
+                text = f" {wrapped[i]}"
                 if truncated and i == self._INFO_PANEL_PARAM_LINES - 1:
-                    # Last visible line — show ▼ indicator at the right edge
-                    if len(line) < width - 2:
-                        line = line.ljust(width - 3) + " ▼"
-                    else:
-                        line = line[: width - 4] + " ▼"
-                scr.addnstr(row, 0, line[: width - 1], width - 1, curses.A_DIM)
+                    text = text[: inner_w - 1]
             else:
-                pass  # leave row blank
+                text = ""
+            _content(row, text, curses.A_DIM)
+
+        # Show "[a] show all" badge on last param row when truncated
+        if truncated:
+            badge = " [a] show all "
+            badge_col = max(2, 1 + inner_w - len(badge))
+            scr.addnstr(
+                11,
+                badge_col,
+                badge,
+                min(len(badge), box_w - badge_col),
+                curses.color_pair(_CP_HEADER) | curses.A_BOLD,
+            )
+
+        # Row 12: bottom border (separator before table)
+        _hline(12, "└", "┘")
 
     def _draw_column_headers(self, width):
         scr = self._stdscr
@@ -264,13 +289,13 @@ class CursesTUI:
         parts = []
         for label, w in cols:
             parts.append(label[:w].ljust(w))
-        header_line = "│".join(parts)
+        header_line = " ".join(parts).ljust(width - 1)
         scr.addnstr(
             row,
             0,
             header_line,
             width - 1,
-            curses.A_BOLD | curses.A_UNDERLINE,
+            curses.color_pair(_CP_COL_HEADER) | curses.A_BOLD,
         )
 
     def _column_specs(self, width):
@@ -344,6 +369,11 @@ class CursesTUI:
         dl_pct = self._format_dl_pct(wid)
         request_id = self._worker_request_id[wid] or "—"
 
+        is_finished = self._worker_finish_time[wid] is not None
+        if is_finished:
+            elapsed = elapsed + " ✓"
+            dl_pct = dl_pct + " ✓"
+
         values = [
             worker_str,
             cds_status,
@@ -354,15 +384,14 @@ class CursesTUI:
             dl_pct,
             request_id,
         ]
-        is_finished = self._worker_finish_time[wid] is not None
 
-        row_attr = curses.A_REVERSE if is_selected else 0
+        row_attr = curses.color_pair(_CP_SELECTED_ROW) if is_selected else 0
 
         col_pos = 0
         for idx, ((label, w), val) in enumerate(zip(cols, values)):
-            # Draw separator
+            # Draw space separator
             if idx > 0 and col_pos < width - 1:
-                scr.addnstr(screen_row, col_pos, "│", 1, row_attr)
+                scr.addnstr(screen_row, col_pos, " ", 1, row_attr)
                 col_pos += 1
 
             cell_text = val[:w].ljust(w)
@@ -370,38 +399,29 @@ class CursesTUI:
             if remaining <= 0:
                 break
 
-            # Status column gets colored badge
-            if label == "Status":
+            # Status column gets foreground color (non-selected rows only)
+            if label == "Status" and not is_selected:
                 color_pair = self._STATUS_COLORS.get(cds_status, 0)
                 if color_pair:
-                    badge = f" {cds_status} "
-                    pad_right = " " * max(0, w - len(badge))
-                    badge_len = min(len(badge), remaining)
                     scr.addnstr(
                         screen_row,
                         col_pos,
-                        badge,
-                        badge_len,
+                        cell_text,
+                        min(w, remaining),
                         curses.color_pair(color_pair),
                     )
-                    pad_start = col_pos + len(badge)
-                    pad_remaining = min(len(pad_right), width - pad_start - 1)
-                    if pad_remaining > 0:
-                        scr.addnstr(
-                            screen_row, pad_start, pad_right, pad_remaining, row_attr
-                        )
                 else:
                     scr.addnstr(
                         screen_row, col_pos, cell_text, min(w, remaining), row_attr
                     )
-            elif label in ("Elapsed", "DL %") and is_finished:
-                # Green background for completed tasks
+            elif label in ("Elapsed", "DL %") and is_finished and not is_selected:
+                # Green foreground for completed tasks
                 scr.addnstr(
                     screen_row,
                     col_pos,
                     cell_text,
                     min(w, remaining),
-                    curses.color_pair(_CP_STATUS_SUCCESS),
+                    curses.color_pair(_CP_GREEN_TEXT),
                 )
             else:
                 scr.addnstr(screen_row, col_pos, cell_text, min(w, remaining), row_attr)
@@ -424,6 +444,37 @@ class CursesTUI:
             scr.move(screen_row, 0)
             scr.clrtoeol()
             scr.addnstr(screen_row, 0, line[: width - 1], width - 1)
+
+        # Clear remaining rows
+        for i in range(len(visible), available_height):
+            screen_row = 1 + i
+            scr.move(screen_row, 0)
+            scr.clrtoeol()
+
+    def _draw_params_view(self, width, available_height):
+        """Draw the full-screen params view for the selected worker."""
+        scr = self._stdscr
+        wid = self._selected_worker
+        params = self._worker_request_params[wid]
+
+        if params:
+            param_str = "Params: " + ", ".join(f"{k}={v}" for k, v in params.items())
+        else:
+            param_str = "Params: —"
+
+        line_width = max(10, width - 2)
+        wrapped = textwrap.wrap(param_str, width=line_width) or [param_str]
+
+        # Apply scroll
+        max_scroll = max(0, len(wrapped) - available_height)
+        self._params_scroll = max(0, min(self._params_scroll, max_scroll))
+        visible = wrapped[self._params_scroll : self._params_scroll + available_height]
+
+        for i, line in enumerate(visible):
+            screen_row = 1 + i  # start after title bar
+            scr.move(screen_row, 0)
+            scr.clrtoeol()
+            scr.addnstr(screen_row, 0, " " + line[: width - 2], width - 1)
 
         # Clear remaining rows
         for i in range(len(visible), available_height):
@@ -522,6 +573,8 @@ class CursesTUI:
         with self._lock:
             if self._view_mode == "logs":
                 self._log_scroll = max(0, self._log_scroll - 1)
+            elif self._view_mode == "params":
+                self._params_scroll = max(0, self._params_scroll - 1)
             else:
                 self._selected_worker = max(0, self._selected_worker - 1)
                 self._ensure_selected_visible()
@@ -531,6 +584,8 @@ class CursesTUI:
         with self._lock:
             if self._view_mode == "logs":
                 self._log_scroll += 1  # clamped in _draw_log_view
+            elif self._view_mode == "params":
+                self._params_scroll += 1  # clamped in _draw_params_view
             else:
                 self._selected_worker = min(
                     self._num_workers - 1, self._selected_worker + 1
@@ -544,37 +599,55 @@ class CursesTUI:
             self._log_scroll = max(0, len(self._worker_logs[self._selected_worker]) - 1)
             self._do_refresh()
 
-    def close_log_view(self):
+    def open_params_view(self):
+        with self._lock:
+            self._view_mode = "params"
+            self._params_scroll = 0
+            self._do_refresh()
+
+    def close_fullscreen_view(self):
         with self._lock:
             self._view_mode = "table"
             self._do_refresh()
 
+    def close_log_view(self):
+        self.close_fullscreen_view()
+
     def page_up(self):
         with self._lock:
-            if self._view_mode == "logs":
+            if self._view_mode in ("logs", "params"):
                 if self._stdscr:
                     height, _ = self._stdscr.getmaxyx()
                     page = height - self.PROGRESS_ROWS - 1
                 else:
                     page = 10
-                self._log_scroll = max(0, self._log_scroll - page)
+                if self._view_mode == "logs":
+                    self._log_scroll = max(0, self._log_scroll - page)
+                else:
+                    self._params_scroll = max(0, self._params_scroll - page)
                 self._do_refresh()
 
     def page_down(self):
         with self._lock:
-            if self._view_mode == "logs":
+            if self._view_mode in ("logs", "params"):
                 if self._stdscr:
                     height, _ = self._stdscr.getmaxyx()
                     page = height - self.PROGRESS_ROWS - 1
                 else:
                     page = 10
-                self._log_scroll += page  # clamped in _draw_log_view
+                if self._view_mode == "logs":
+                    self._log_scroll += page  # clamped in _draw_log_view
+                else:
+                    self._params_scroll += page  # clamped in _draw_params_view
                 self._do_refresh()
 
     def log_home(self):
         with self._lock:
             if self._view_mode == "logs":
                 self._log_scroll = 0
+                self._do_refresh()
+            elif self._view_mode == "params":
+                self._params_scroll = 0
                 self._do_refresh()
 
     def log_end(self):
@@ -583,6 +656,9 @@ class CursesTUI:
                 self._log_scroll = max(
                     0, len(self._worker_logs[self._selected_worker]) - 1
                 )
+                self._do_refresh()
+            elif self._view_mode == "params":
+                self._params_scroll = 999999  # clamped in _draw_params_view
                 self._do_refresh()
 
     def select_worker(self, worker_id):
@@ -598,8 +674,7 @@ class CursesTUI:
         mouse_event: tuple from curses.getmouse() — (id, x, y, z, bstate)
         """
         with self._lock:
-            if self._view_mode == "logs":
-                # In log view, ignore mouse
+            if self._view_mode != "table":
                 return
             _, mx, my, _, bstate = mouse_event
             if bstate & curses.BUTTON1_CLICKED:
@@ -745,6 +820,11 @@ class CursesTUI:
                 self._draw_header(width)
                 log_height = height - self.PROGRESS_ROWS - 1  # 1 for title bar
                 self._draw_log_view(width, log_height)
+                self._draw_progress_bar(height, width)
+            elif self._view_mode == "params":
+                self._draw_header(width)
+                params_height = height - self.PROGRESS_ROWS - 1
+                self._draw_params_view(width, params_height)
                 self._draw_progress_bar(height, width)
             else:
                 self._draw_header(width)

@@ -41,6 +41,51 @@ VARIABLES = [
     "surface_net_solar_radiation",
 ]
 
+# Heavy request params that exceed 4 lines in the info panel
+HEAVY_PARAMS = {
+    "product_type": "reanalysis",
+    "variable": [
+        "2m_temperature",
+        "10m_u_component_of_wind",
+        "10m_v_component_of_wind",
+        "total_precipitation",
+        "surface_pressure",
+        "mean_sea_level_pressure",
+        "soil_temperature_level_1",
+        "surface_net_solar_radiation",
+        "skin_temperature",
+        "geopotential",
+        "relative_humidity",
+        "specific_humidity",
+        "temperature",
+        "u_component_of_wind",
+    ],
+    "pressure_level": [
+        "1000",
+        "975",
+        "950",
+        "925",
+        "900",
+        "850",
+        "800",
+        "700",
+        "600",
+        "500",
+        "400",
+        "300",
+        "250",
+        "200",
+        "150",
+        "100",
+    ],
+    "year": ["2023", "2024"],
+    "month": ["01", "02", "03", "04", "05", "06"],
+    "day": [f"{d:02d}" for d in range(1, 32)],
+    "time": ["00:00", "06:00", "12:00", "18:00"],
+    "format": "grib",
+    "area": [60, -10, 35, 30],
+}
+
 
 def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
     """Simulate download activity by driving the TUI directly.
@@ -64,17 +109,21 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
         size = random.randint(50 * 1024**2, 8 * 1024**3)  # 50 MB - 8 GB
         request_id = str(uuid.uuid4())
         dataset = random.choice(DATASETS)
-        variable = random.choice(VARIABLES)
-        month = random.randint(1, 12)
-        request_params = {
-            "product_type": "reanalysis",
-            "variable": variable,
-            "year": "2024",
-            "month": f"{month:02d}",
-            "day": [f"{d:02d}" for d in range(1, 32)],
-            "time": "00:00",
-            "format": "grib",
-        }
+        if i < 3:
+            # First 3 tasks get heavy params (>4 lines in info panel)
+            request_params = HEAVY_PARAMS
+        else:
+            variable = random.choice(VARIABLES)
+            month = random.randint(1, 12)
+            request_params = {
+                "product_type": "reanalysis",
+                "variable": variable,
+                "year": "2024",
+                "month": f"{month:02d}",
+                "day": [f"{d:02d}" for d in range(1, 32)],
+                "time": "00:00",
+                "format": "grib",
+            }
         target = f"/data/downloads/{dataset}/{fname}"
         task_queue.append((fname, size, request_id, dataset, request_params, target))
 
@@ -108,7 +157,7 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
         _assign(wid)
 
     while not stop_event.is_set() and (active or task_idx < num_tasks):
-        time.sleep(0.15)
+        time.sleep(0.35)
         if stop_event.is_set():
             break
 
@@ -117,14 +166,14 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
             phase = state["phase"]
             state["phase_ticks"] += 1
 
-            if phase == 0 and state["phase_ticks"] >= random.randint(3, 8):
+            if phase == 0 and state["phase_ticks"] >= random.randint(5, 15):
                 # accepted -> running (server processing)
                 state["phase"] = 1
                 state["phase_ticks"] = 0
                 tui.set_worker_cds_status(wid, "running")
                 tui.append_worker_log(wid, "status has been updated to running")
 
-            elif phase == 1 and state["phase_ticks"] >= random.randint(5, 15):
+            elif phase == 1 and state["phase_ticks"] >= random.randint(10, 30):
                 # running -> successful (data ready on server)
                 state["phase"] = 2
                 state["phase_ticks"] = 0
@@ -132,15 +181,15 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
                 tui.append_worker_log(wid, "status has been updated to successful")
                 tui.append_worker_log(wid, "Request is completed, starting download")
 
-            elif phase == 2 and state["phase_ticks"] >= random.randint(1, 3):
+            elif phase == 2 and state["phase_ticks"] >= random.randint(2, 5):
                 # successful -> downloading (transfer begins)
                 state["phase"] = 3
                 state["phase_ticks"] = 0
                 tui.append_worker_log(wid, "Starting download...")
 
             elif phase == 3:
-                # Downloading: increment bytes
-                chunk = random.randint(state["size"] // 40, state["size"] // 15)
+                # Downloading: increment bytes (slower chunks for longer runtime)
+                chunk = random.randint(state["size"] // 80, state["size"] // 30)
                 state["dl_bytes"] = min(state["dl_bytes"] + chunk, state["size"])
                 tui.update_worker_progress(wid, state["dl_bytes"], state["size"])
                 done_mb = state["dl_bytes"] / (1024 * 1024)
@@ -160,8 +209,14 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
                     tui.set_worker_finished(wid)
                     tasks_done += 1
                     tui.update_progress(tasks_done, num_tasks, 0)
-                    del active[wid]
-                    _assign(wid)
+                    # Enter cooldown phase so finished state is visible
+                    state["phase"] = 4
+                    state["phase_ticks"] = 0
+
+            elif phase == 4 and state["phase_ticks"] >= random.randint(8, 15):
+                # Cooldown finished — assign next task
+                del active[wid]
+                _assign(wid)
 
     if not stop_event.is_set():
         failed = sum(
@@ -176,7 +231,7 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
 def main():
     parser = argparse.ArgumentParser(description="Demo the cdsswarm TUI")
     parser.add_argument("-w", "--workers", type=int, default=4)
-    parser.add_argument("-t", "--tasks", type=int, default=12)
+    parser.add_argument("-t", "--tasks", type=int, default=50)
     args = parser.parse_args()
 
     tui = CursesTUI(num_workers=args.workers, title="cdsswarm demo (simulated)")
@@ -217,8 +272,13 @@ def main():
                         tui.close_log_view()
                     else:
                         tui.open_log_view()
+                elif key == ord("a"):
+                    if tui._view_mode == "params":
+                        tui.close_fullscreen_view()
+                    elif tui._view_mode == "table":
+                        tui.open_params_view()
                 elif key == 27:  # Escape
-                    tui.close_log_view()
+                    tui.close_fullscreen_view()
                 elif key == curses.KEY_PPAGE:
                     tui.page_up()
                 elif key == curses.KEY_NPAGE:
