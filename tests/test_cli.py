@@ -102,10 +102,12 @@ class TestCLIParsing:
         parser = _build_parser()
         args = parser.parse_args(["requests.json"])
         assert args.requests_file == "requests.json"
-        assert args.workers == 4
-        assert args.mode == "auto"
-        assert not args.no_skip
-        assert args.reuse is True
+        assert args.workers is None
+        assert args.mode is None
+        assert args.no_skip is None
+        assert args.reuse is None
+        assert args.max_retries is None
+        assert args.output_dir is None
         assert not args.dry_run
 
     def test_custom_args(self):
@@ -150,9 +152,130 @@ class TestCLIParsing:
         args = parser.parse_args(["f.json", "--reuse"])
         assert args.reuse is True
 
+    def test_output_dir_flag(self):
+        from cdsswarm.cli import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(["f.json", "--output-dir", "data/cds/"])
+        assert args.output_dir == "data/cds/"
+
     def test_version(self, capsys):
         from cdsswarm.cli import _build_parser
 
         parser = _build_parser()
         with pytest.raises(SystemExit, match="0"):
             parser.parse_args(["--version"])
+
+
+class TestConfigIntegration:
+    """Test that CLI main() integrates with config files."""
+
+    def test_config_values_used(self, tmp_dir):
+        """Config file values are used when no CLI flag given."""
+        from unittest.mock import patch
+
+        from cdsswarm.cli import main
+
+        requests_file = os.path.join(tmp_dir, "requests.json")
+        with open(requests_file, "w") as f:
+            json.dump([{"dataset": "ds", "request": {}, "target": "out.grib"}], f)
+
+        cfg_file = os.path.join(tmp_dir, ".cdsswarm.toml")
+        with open(cfg_file, "w") as f:
+            f.write("workers = 12\n")
+
+        with (
+            patch(
+                "cdsswarm.config.USER_CONFIG_PATH",
+                __import__("pathlib").Path(tmp_dir) / "nope.toml",
+            ),
+            patch(
+                "cdsswarm.config.Path.cwd",
+                return_value=__import__("pathlib").Path(tmp_dir),
+            ),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([requests_file, "--dry-run"])
+
+    def test_cli_overrides_config(self, tmp_dir):
+        """CLI flags override config file values."""
+        from unittest.mock import patch
+
+        from cdsswarm.cli import main
+
+        requests_file = os.path.join(tmp_dir, "requests.json")
+        with open(requests_file, "w") as f:
+            json.dump([{"dataset": "ds", "request": {}, "target": "out.grib"}], f)
+
+        cfg_file = os.path.join(tmp_dir, ".cdsswarm.toml")
+        with open(cfg_file, "w") as f:
+            f.write("workers = 12\n")
+
+        with (
+            patch(
+                "cdsswarm.config.USER_CONFIG_PATH",
+                __import__("pathlib").Path(tmp_dir) / "nope.toml",
+            ),
+            patch(
+                "cdsswarm.config.Path.cwd",
+                return_value=__import__("pathlib").Path(tmp_dir),
+            ),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([requests_file, "--dry-run", "-w", "2"])
+
+    def test_output_dir_prepends_to_targets(self, tmp_dir, capsys):
+        """--output-dir prepends directory to relative target paths."""
+        from unittest.mock import patch
+
+        from cdsswarm.cli import main
+
+        requests_file = os.path.join(tmp_dir, "requests.json")
+        with open(requests_file, "w") as f:
+            json.dump([{"dataset": "ds", "request": {}, "target": "out.grib"}], f)
+
+        with (
+            patch(
+                "cdsswarm.config.USER_CONFIG_PATH",
+                __import__("pathlib").Path(tmp_dir) / "nope.toml",
+            ),
+            patch(
+                "cdsswarm.config.Path.cwd",
+                return_value=__import__("pathlib").Path(tmp_dir),
+            ),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([requests_file, "--dry-run", "--output-dir", "data/cds"])
+
+        output = capsys.readouterr().out
+        assert "data/cds/out.grib" in output
+
+    def test_output_dir_from_config(self, tmp_dir, capsys):
+        """output-dir from config file is applied."""
+        from unittest.mock import patch
+
+        from cdsswarm.cli import main
+
+        requests_file = os.path.join(tmp_dir, "requests.json")
+        with open(requests_file, "w") as f:
+            json.dump([{"dataset": "ds", "request": {}, "target": "out.grib"}], f)
+
+        cfg_file = os.path.join(tmp_dir, ".cdsswarm.toml")
+        with open(cfg_file, "w") as f:
+            f.write('output-dir = "my/output"\n')
+
+        with (
+            patch(
+                "cdsswarm.config.USER_CONFIG_PATH",
+                __import__("pathlib").Path(tmp_dir) / "nope.toml",
+            ),
+            patch(
+                "cdsswarm.config.Path.cwd",
+                return_value=__import__("pathlib").Path(tmp_dir),
+            ),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([requests_file, "--dry-run"])
+
+        output = capsys.readouterr().out
+        assert "my/output/out.grib" in output

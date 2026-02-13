@@ -233,32 +233,38 @@ def _build_parser() -> argparse.ArgumentParser:
         "-w",
         "--workers",
         type=int,
-        default=4,
+        default=None,
         help="Number of parallel download workers (default: 4)",
     )
     parser.add_argument(
         "-m",
         "--mode",
         choices=["interactive", "script", "auto"],
-        default="auto",
+        default=None,
         help="Display mode (default: auto)",
     )
     parser.add_argument(
         "--no-skip",
         action="store_true",
+        default=None,
         help="Re-download files that already exist",
     )
     parser.add_argument(
         "--reuse",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=None,
         help="Reuse existing CDS jobs with matching parameters (default: enabled)",
     )
     parser.add_argument(
         "--max-retries",
         type=int,
-        default=3,
+        default=None,
         help="Max retry attempts per task (default: 3, 1 to disable)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Prepend directory to relative target paths",
     )
     parser.add_argument(
         "--dry-run",
@@ -285,6 +291,33 @@ def main(argv: list[str] | None = None):
         print("No download tasks found in the requests file.", file=sys.stderr)
         sys.exit(1)
 
+    # Build CLI overrides (only explicitly provided flags).
+    # --no-skip is inverted: CLI flag means skip_existing=False.
+    cli_overrides: dict[str, object] = {
+        "workers": args.workers,
+        "mode": args.mode,
+        "reuse": args.reuse,
+        "max_retries": args.max_retries,
+        "output_dir": args.output_dir,
+    }
+    if args.no_skip is True:
+        cli_overrides["skip_existing"] = False
+
+    from .config import resolve_settings
+
+    try:
+        settings = resolve_settings(cli_overrides)
+    except ValueError as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # Apply output_dir: prepend to relative target paths.
+    output_dir = settings["output_dir"]
+    if output_dir:
+        for task in tasks:
+            if not os.path.isabs(task.target):
+                task.target = os.path.join(output_dir, task.target)
+
     if args.dry_run:
         print(f"{'Target':<50} {'Dataset':<40} {'Exists'}")
         print("-" * 95)
@@ -294,17 +327,16 @@ def main(argv: list[str] | None = None):
         print(f"\n{len(tasks)} task(s) total")
         sys.exit(0)
 
-    mode = _resolve_mode(args.mode)
-    skip_existing = not args.no_skip
+    mode = _resolve_mode(settings["mode"])
+    skip_existing = settings["skip_existing"]
+    workers = settings["workers"]
+    reuse = settings["reuse"]
+    max_retries = settings["max_retries"]
 
     if mode == "interactive":
-        results = _run_interactive(
-            tasks, args.workers, skip_existing, args.reuse, args.max_retries
-        )
+        results = _run_interactive(tasks, workers, skip_existing, reuse, max_retries)
     else:
-        results = _run_script(
-            tasks, args.workers, skip_existing, args.reuse, args.max_retries
-        )
+        results = _run_script(tasks, workers, skip_existing, reuse, max_retries)
 
     if results is None:
         sys.exit(1)
