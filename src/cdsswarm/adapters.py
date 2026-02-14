@@ -124,6 +124,7 @@ class PlainTextAdapter(OutputAdapter):
         interactive: bool | None = None,
     ):
         self._write = write_fn or print
+        self._lock = threading.Lock()
         self._done = 0
         self._total = 0
         self._last_status: dict[int, str] = {}
@@ -147,9 +148,10 @@ class PlainTextAdapter(OutputAdapter):
         return tag
 
     def on_task_started(self, worker_id, task):
-        self._last_status.pop(worker_id, None)
-        self._last_dl_milestone.pop(worker_id, None)
-        self._worker_labels[worker_id] = task.label
+        with self._lock:
+            self._last_status.pop(worker_id, None)
+            self._last_dl_milestone.pop(worker_id, None)
+            self._worker_labels[worker_id] = task.label
         self._write(f"  {self._worker_tag(worker_id)} starting {task.label}")
 
     def _status_text(self, cds_status: str) -> str:
@@ -167,10 +169,11 @@ class PlainTextAdapter(OutputAdapter):
     def on_task_message(self, worker_id, message):
         cds_status = parse_cds_status(message)
         if cds_status:
-            if self._last_status.get(worker_id) == cds_status:
-                return
-            self._last_status[worker_id] = cds_status
-            label = self._worker_labels.get(worker_id, "")
+            with self._lock:
+                if self._last_status.get(worker_id) == cds_status:
+                    return
+                self._last_status[worker_id] = cds_status
+                label = self._worker_labels.get(worker_id, "")
             status = self._status_text(cds_status)
             if label:
                 self._write(f"  {self._worker_tag(worker_id)} {label}: {status}")
@@ -186,12 +189,13 @@ class PlainTextAdapter(OutputAdapter):
         )
         if milestone is None:
             return
-        if self._last_dl_milestone.get(worker_id) == milestone:
-            return
-        self._last_dl_milestone[worker_id] = milestone
+        with self._lock:
+            if self._last_dl_milestone.get(worker_id) == milestone:
+                return
+            self._last_dl_milestone[worker_id] = milestone
+            label = self._worker_labels.get(worker_id, "")
         done_mb = downloaded_bytes / (1024 * 1024)
         total_mb = total_bytes / (1024 * 1024)
-        label = self._worker_labels.get(worker_id, "")
         prefix = f"{label}: " if label else ""
         self._write(
             f"  {self._worker_tag(worker_id)} {prefix}downloading "
@@ -204,16 +208,20 @@ class PlainTextAdapter(OutputAdapter):
         return text
 
     def on_task_completed(self, worker_id, task, success, error=""):
+        with self._lock:
+            done_count = self._done
+            total_count = self._total
         if success:
-            counter = self._green(f"[{self._done}/{self._total}]")
+            counter = self._green(f"[{done_count}/{total_count}]")
             done = self._green("done")
             self._write(f"  {counter} {task.label} {done}")
         else:
-            self._write(f"  [{self._done}/{self._total}] {task.label} FAILED: {error}")
+            self._write(f"  [{done_count}/{total_count}] {task.label} FAILED: {error}")
 
     def on_progress_update(self, completed, total, skipped):
-        self._done = completed
-        self._total = total
+        with self._lock:
+            self._done = completed
+            self._total = total
 
     def on_global_message(self, message):
         if self._color and "All downloads completed" in message:
@@ -223,7 +231,8 @@ class PlainTextAdapter(OutputAdapter):
 
     def on_task_checksum_result(self, worker_id, passed, expected):
         if not passed:
-            label = self._worker_labels.get(worker_id, "")
+            with self._lock:
+                label = self._worker_labels.get(worker_id, "")
             prefix = f"{label}: " if label else ""
             warning = f"WARNING: checksum mismatch (expected {expected})"
             if self._color:
@@ -245,9 +254,10 @@ class PlainTextAdapter(OutputAdapter):
 
     def on_qos_update(self, queued, running, limit):
         new_qos = (queued, running, limit)
-        if new_qos == self._last_qos:
-            return
-        self._last_qos = new_qos
+        with self._lock:
+            if new_qos == self._last_qos:
+                return
+            self._last_qos = new_qos
         if queued > 0 or running > 0:
             self._write(f"  [CDS server] {queued} queued | {running}/{limit} running")
 

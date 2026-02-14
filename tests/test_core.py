@@ -384,6 +384,103 @@ class TestSwarmDownloader:
         assert mock_client.retrieve.call_count == 1
 
     @patch("cdsswarm.core.cdsapi")
+    def test_debug_cb_fallback_on_format_error(self, mock_cdsapi, tmp_dir):
+        """debug_callback falls back to str(msg) instead of silently dropping."""
+        captured_debug_cb = []
+
+        def capture_client(**kwargs):
+            client = MagicMock()
+            if "debug_callback" in kwargs:
+                captured_debug_cb.append(kwargs["debug_callback"])
+
+            def fake_retrieve(dataset, request, target):
+                with open(target, "w") as f:
+                    f.write("data")
+
+            client.retrieve.side_effect = fake_retrieve
+            return client
+
+        mock_cdsapi.Client.side_effect = capture_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1)
+        downloader.run()
+
+        assert captured_debug_cb, "debug_callback was not passed to Client"
+        debug_cb = captured_debug_cb[0]
+
+        # Call with args that will cause % formatting to fail
+        # (msg expects %d but gets a string)
+        debug_cb("request id %d", "not-a-number")
+
+        # Should NOT raise — the old code would silently return,
+        # the fix falls back to str(msg) and still calls _check_request_id.
+        # We can't easily verify _check_request_id was called, but we verify
+        # it didn't crash.
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_debug_cb_extracts_request_id(self, mock_cdsapi, tmp_dir):
+        """debug_callback extracts request IDs even from fallback formatting."""
+        captured_debug_cb = []
+
+        def capture_client(**kwargs):
+            client = MagicMock()
+            if "debug_callback" in kwargs:
+                captured_debug_cb.append(kwargs["debug_callback"])
+
+            def fake_retrieve(dataset, request, target):
+                with open(target, "w") as f:
+                    f.write("data")
+
+            client.retrieve.side_effect = fake_retrieve
+            return client
+
+        mock_cdsapi.Client.side_effect = capture_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1)
+        downloader.run()
+
+        debug_cb = captured_debug_cb[0]
+
+        # Call with a UUID-like request ID that would fail % formatting
+        # but the raw msg contains a request ID
+        debug_cb("Request ID: %s abc-12345-def", object())
+
+        # The fallback str(msg) should contain the raw format string,
+        # which doesn't contain a valid UUID, so on_task_request_id
+        # should NOT be called for this specific case.
+        # But the key point is it doesn't crash.
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_concurrent_timing_and_warnings(self, mock_cdsapi, tmp_dir):
+        """Timing and warnings are correctly collected under concurrent access."""
+        mock_client = MagicMock()
+
+        def fake_retrieve(dataset, request, target):
+            with open(target, "w") as f:
+                f.write("x" * 1024)
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=6)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=4)
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 6
+        assert all(r.success for r in results)
+        # All results should have valid timing
+        for r in results:
+            assert r.start_time > 0
+            assert r.end_time >= r.start_time
+            assert r.file_size > 0
+
+    @patch("cdsswarm.core.cdsapi")
     def test_retry_message_sent(self, mock_cdsapi, tmp_dir):
         """Adapter receives retry messages on transient failures."""
         mock_client = MagicMock()

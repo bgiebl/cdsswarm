@@ -193,10 +193,11 @@ class SwarmDownloader:
                     return None
                 task = futures[future]
                 completed += 1
-                wid = state.task_worker_map.get(task.target, 0)
+                with state.lock:
+                    wid = state.task_worker_map.get(task.target, 0)
+                    timing = self._task_timing.get(task.target, (0.0, 0.0, 0))
+                    warns = self._task_warnings.get(task.target, [])
                 self._adapter.on_progress_update(completed, len(pending), skipped)
-                timing = self._task_timing.get(task.target, (0.0, 0.0, 0))
-                warns = self._task_warnings.get(task.target, [])
                 try:
                     future.result()
                     self._adapter.on_task_completed(wid, task, True)
@@ -279,7 +280,7 @@ class SwarmDownloader:
             try:
                 formatted = msg % args if args else str(msg)
             except Exception:
-                return
+                formatted = str(msg)
             _check_request_id(formatted)
 
         client = cdsapi.Client(
@@ -358,11 +359,12 @@ class SwarmDownloader:
                                     if decision == "retry":
                                         should_retry = True
                                     else:
-                                        self._task_warnings.setdefault(
-                                            task.target, []
-                                        ).append(
-                                            f"Checksum mismatch (expected {checksum_md5})"
-                                        )
+                                        with state.lock:
+                                            self._task_warnings.setdefault(
+                                                task.target, []
+                                            ).append(
+                                                f"Checksum mismatch (expected {checksum_md5})"
+                                            )
                                 else:
                                     self._adapter.on_task_message(wid, "Checksum OK")
                     except Exception:
@@ -378,7 +380,8 @@ class SwarmDownloader:
         finally:
             end = time.time()
             size = os.path.getsize(task.target) if os.path.exists(task.target) else 0
-            self._task_timing[task.target] = (start, end, size)
+            with state.lock:
+                self._task_timing[task.target] = (start, end, size)
 
     def _get_worker_id(self, state: _WorkerState) -> int:
         tid = threading.current_thread().ident

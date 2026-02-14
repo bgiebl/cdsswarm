@@ -1,5 +1,7 @@
 """Tests for output adapters."""
 
+import threading
+
 from cdsswarm.adapters import PlainTextAdapter
 from cdsswarm.core import Task
 
@@ -229,3 +231,77 @@ class TestPlainTextAdapter:
         assert "[Worker 1]" in messages[1]
         assert "[Worker 2]" in messages[2]
         assert "[Worker 3]" in messages[3]
+
+    def test_has_lock(self):
+        adapter = PlainTextAdapter()
+        assert isinstance(adapter._lock, type(threading.Lock()))
+
+    def test_concurrent_task_lifecycle(self):
+        """Multiple threads calling adapter methods concurrently don't raise."""
+        messages = []
+        lock = threading.Lock()
+
+        def safe_append(msg):
+            with lock:
+                messages.append(msg)
+
+        adapter = PlainTextAdapter(write_fn=safe_append, use_color=False)
+        errors = []
+
+        def worker(wid):
+            try:
+                task = Task("ds", {}, f"file_{wid}.grib")
+                adapter.on_task_started(wid, task)
+                adapter.on_task_message(wid, "Request is queued")
+                adapter.on_task_message(wid, "Request is running")
+                total = 100 * 1024 * 1024
+                for pct in (25, 50, 75, 100):
+                    adapter.on_task_progress(wid, total * pct // 100, total)
+                adapter.on_progress_update(wid + 1, 8, 0)
+                adapter.on_task_completed(wid, task, success=True)
+                adapter.on_qos_update(10 - wid, wid, 20)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"Threads raised exceptions: {errors}"
+        # Each worker should produce at least: started + 2 status + 4 milestones + completed
+        assert len(messages) >= 8 * 4  # conservative lower bound
+
+    def test_concurrent_status_dedup(self):
+        """Status deduplication works correctly under concurrent access."""
+        messages = []
+        lock = threading.Lock()
+
+        def safe_append(msg):
+            with lock:
+                messages.append(msg)
+
+        adapter = PlainTextAdapter(write_fn=safe_append, use_color=False)
+        errors = []
+        barrier = threading.Barrier(4)
+
+        def worker(wid):
+            try:
+                # All threads hammer the same worker_id to stress check-then-act
+                barrier.wait()
+                for _ in range(50):
+                    adapter.on_task_message(0, "Request is queued")
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+        # "accepted" should appear exactly once due to deduplication
+        accepted_msgs = [m for m in messages if "accepted" in m]
+        assert len(accepted_msgs) == 1
