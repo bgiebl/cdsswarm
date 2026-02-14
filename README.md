@@ -1,26 +1,29 @@
 # cdsswarm
 
-Concurrent [CDS API](https://cds.climate.copernicus.eu/) downloader with a curses TUI and script mode.
+Concurrent [CDS API](https://cds.climate.copernicus.eu/) downloader with an interactive Textual TUI and script mode.
 
-Submit multiple CDS API requests and download them in parallel with a configurable number of workers. Monitor progress through an interactive terminal UI with per-worker status panels, or run headless in script mode for CI/cron jobs.
+Submit multiple CDS API requests and download them in parallel with a configurable number of workers. Monitor progress through an interactive terminal UI with an htop-style worker table, or run headless in script mode for CI/cron jobs.
 
-![TUI screenshot](img/tui_screenshot.png)
+![Workers tab](img/tui_screenshot_workers.png)
+![Files tab](img/tui_screenshot.png)
 
 ## Installation
 
 ```bash
-pip install .
+pip install cdsswarm
 ```
 
 For YAML request file support:
 
 ```bash
-pip install ".[yaml]"
+pip install "cdsswarm[yaml]"
 ```
 
-For development (tests):
+For development (tests, pre-commit):
 
 ```bash
+git clone https://github.com/bgiebl/cdsswarm.git
+cd cdsswarm
 pip install -e ".[dev]"
 ```
 
@@ -124,7 +127,11 @@ for r in results:
 ## CLI Reference
 
 ```
-usage: cdsswarm [-h] [-w WORKERS] [-m {interactive,script,auto}] [--no-skip] requests_file
+usage: cdsswarm [-h] [--version] [-w WORKERS] [-m {interactive,script,auto}]
+                [--no-skip] [--reuse | --no-reuse] [--max-retries MAX_RETRIES]
+                [--output-dir OUTPUT_DIR] [--dry-run] [--log FILE]
+                [--summary FILE]
+                requests_file
 ```
 
 | Argument | Description |
@@ -133,8 +140,14 @@ usage: cdsswarm [-h] [-w WORKERS] [-m {interactive,script,auto}] [--no-skip] req
 | `-w`, `--workers` | Number of parallel download workers (default: 4) |
 | `-m`, `--mode` | Display mode: `interactive` (TUI), `script` (plain text), or `auto` (default) |
 | `--no-skip` | Re-download files that already exist on disk |
+| `--reuse` / `--no-reuse` | Reuse existing CDS jobs with matching parameters (default: enabled) |
+| `--max-retries` | Max retry attempts per task (default: 3, 1 to disable) |
+| `--output-dir` | Prepend directory to relative target paths |
+| `--dry-run` | Show what would be downloaded without actually downloading |
+| `--log FILE` | Write timestamped log to a file |
+| `--summary FILE` | Export summary as JSON (`.json`) or CSV (`.csv`) |
 
-In `auto` mode, the TUI is used when stdout is a TTY and the terminal is large enough; otherwise it falls back to script mode.
+In `auto` mode, the TUI is used when stdout is a TTY; otherwise it falls back to script mode.
 
 ## Request File Format
 
@@ -203,7 +216,7 @@ A single CDS API download request.
 | `request` | `dict` | Request parameters, same format as `cdsapi.Client.retrieve()` |
 | `target` | `str` | Local file path to save the downloaded data |
 
-### `cdsswarm.download(tasks, num_workers=4, skip_existing=True, on_message=None)`
+### `cdsswarm.download(tasks, num_workers=4, skip_existing=True, reuse_jobs=False, max_retries=3, on_message=None)`
 
 Download multiple CDS API requests concurrently.
 
@@ -212,6 +225,8 @@ Download multiple CDS API requests concurrently.
 | `tasks` | `list[Task]` | required | List of download tasks |
 | `num_workers` | `int` | `4` | Number of parallel workers |
 | `skip_existing` | `bool` | `True` | Skip files that already exist |
+| `reuse_jobs` | `bool` | `False` | Reuse existing CDS jobs with matching parameters |
+| `max_retries` | `int` | `3` | Max retry attempts per task (1 to disable) |
 | `on_message` | `callable` | `None` | Callback `fn(message: str)` for status updates |
 
 Returns a `list[Result]`. Returns an empty list if interrupted by `KeyboardInterrupt`.
@@ -226,15 +241,26 @@ Returns a `list[Result]`. Returns an empty list if interrupted by `KeyboardInter
 
 ## TUI
 
-The interactive TUI (terminal user interface) is only available via the CLI. It shows:
+The interactive TUI (terminal user interface) is built with [Textual](https://textual.textualize.io/) and is available via the CLI only. It shows an htop-style `DataTable` with one row per worker:
 
-- One panel per worker with CDS API status badges (accepted/running/successful/failed), request IDs, and log messages
-- A global progress bar with percentage, file count, and ETA
-- Download progress per worker (MB downloaded)
+```
+W  │Status      │Prog │Filename          │Started  │Elapsed  │Size    │DL %   │Request ID
+0  │ running    │72%  │era5_2024_01.grib │22:31:24 │2h30m05s │15.2 GB│48%    │af1e2306-28c3...
+1  │ successful │100% │era5_2024_02.nc   │22:31:25 │1h15m00s │8.1 GB │100% ✓ │b2f4a891-...
+```
 
-The TUI requires a terminal of at least 40 columns and 10 rows. Press any key to exit after all downloads complete.
+The layout has two tabs (Workers and Files), an info panel above the table, and a progress footer with an overall progress bar and ETA.
 
-Press `Ctrl+C` to cancel — in-flight CDS API requests will be cancelled on the server.
+**Key bindings:**
+
+| Key | Action |
+|---|---|
+| `q` | Quit |
+| `t` / `Tab` | Switch tab |
+| `Enter` | Open scrollable log for the selected worker |
+| `a` | Show full request parameters |
+| `Esc` | Dismiss screen / go back |
+| `Ctrl+C` | Cancel — in-flight CDS API requests are cancelled on the server |
 
 ## Running Tests
 
