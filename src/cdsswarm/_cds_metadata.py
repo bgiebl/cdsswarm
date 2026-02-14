@@ -168,10 +168,72 @@ def compute_md5(filepath: str) -> str:
     return h.hexdigest()
 
 
-def verify_checksum(filepath: str, expected_md5: str) -> bool:
-    """Verify a file's MD5 checksum matches the expected value."""
-    actual = compute_md5(filepath)
-    return actual == expected_md5
+# Multihash function codes → hashlib algorithm names
+_MULTIHASH_ALGOS: dict[int, str] = {
+    0x11: "sha1",
+    0x12: "sha256",
+    0x13: "sha512",
+    0xD5: "md5",
+}
+
+
+def _read_uvarint(data: bytes, offset: int) -> tuple[int, int]:
+    """Read an unsigned varint, return (value, new_offset)."""
+    result = 0
+    shift = 0
+    while offset < len(data):
+        byte = data[offset]
+        offset += 1
+        result |= (byte & 0x7F) << shift
+        if not (byte & 0x80):
+            return result, offset
+        shift += 7
+    raise ValueError("truncated varint")
+
+
+def parse_multihash(mh_hex: str) -> tuple[str, bytes]:
+    """Parse a hex-encoded multihash string.
+
+    Returns:
+        (hashlib_algorithm_name, digest_bytes)
+    """
+    raw = bytes.fromhex(mh_hex)
+    code, offset = _read_uvarint(raw, 0)
+    length, offset = _read_uvarint(raw, offset)
+    digest = raw[offset : offset + length]
+    if len(digest) != length:
+        raise ValueError(f"expected {length} digest bytes, got {len(digest)}")
+    algo = _MULTIHASH_ALGOS.get(code)
+    if algo is None:
+        raise ValueError(f"unsupported multihash function code: 0x{code:x}")
+    return algo, digest
+
+
+def compute_file_hash(filepath: str, algorithm: str) -> bytes:
+    """Compute the hash digest (raw bytes) of a file."""
+    h = hashlib.new(algorithm)
+    with open(filepath, "rb") as f:
+        while True:
+            chunk = f.read(8192)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.digest()
+
+
+def verify_checksum(filepath: str, expected: str) -> bool:
+    """Verify a file against a multihash-encoded checksum string.
+
+    Falls back to bare MD5 hex comparison for backwards compatibility.
+    """
+    try:
+        algo, expected_digest = parse_multihash(expected)
+    except (ValueError, KeyError):
+        # Fallback: treat as bare MD5 hex
+        actual = compute_md5(filepath)
+        return actual == expected
+    actual_digest = compute_file_hash(filepath, algo)
+    return actual_digest == expected_digest
 
 
 class MetadataPoller:

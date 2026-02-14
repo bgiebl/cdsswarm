@@ -563,12 +563,13 @@ class CursesTUI:
         fname = self._worker_filename[wid] or "—"
         expected = self._checksum_dialog_expected
 
-        # Compute actual checksum for display
+        # Compute actual checksum for display (same algorithm as expected)
         target = self._worker_target[wid]
         try:
-            from ._cds_metadata import compute_md5
+            from ._cds_metadata import compute_file_hash, parse_multihash
 
-            actual = compute_md5(target) if target else "?"
+            algo, _ = parse_multihash(expected)
+            actual = compute_file_hash(target, algo).hex() if target else "?"
         except Exception:
             actual = "?"
 
@@ -1094,7 +1095,14 @@ class CursesTUI:
         if not self._stdscr:
             return
         try:
+            # Detect terminal resize even without KEY_RESIZE (which may
+            # not be delivered in all terminals/multiplexers).
+            actual = shutil.get_terminal_size()
             height, width = self._stdscr.getmaxyx()
+            if (actual.lines, actual.columns) != (height, width):
+                curses.resizeterm(actual.lines, actual.columns)
+                height, width = self._stdscr.getmaxyx()
+
             cur_size = (height, width)
 
             if height < self.MIN_HEIGHT or width < self.MIN_WIDTH:

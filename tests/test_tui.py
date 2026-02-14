@@ -18,11 +18,14 @@ from cdsswarm.tui import (
 
 
 @contextmanager
-def _mock_curses():
+def _mock_curses(term_lines=40, term_cols=120):
     """Patch curses functions that require initscr()."""
+    fake_size = type("terminal_size", (), {"lines": term_lines, "columns": term_cols})()
     with (
         patch("curses.color_pair", side_effect=lambda n: n << 8),
         patch("curses.doupdate"),
+        patch("curses.resizeterm"),
+        patch("cdsswarm.tui.shutil.get_terminal_size", return_value=fake_size),
     ):
         yield
 
@@ -112,7 +115,8 @@ class TestCursesTUI:
         tui = CursesTUI(num_workers=2)
         stdscr = _mock_stdscr(height=5, width=20)
         tui._stdscr = stdscr
-        tui._render()
+        with _mock_curses(term_lines=5, term_cols=20):
+            tui._render()
         stdscr.erase.assert_called()
         stdscr.addstr.assert_called()
 

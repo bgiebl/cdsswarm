@@ -101,108 +101,127 @@ def _run_interactive(
     def _main(stdscr):
         nonlocal results
         tui.start(stdscr)
-        adapter = CursesAdapter(tui)
-        if log_file:
-            adapter = LoggingAdapter(adapter, log_file)
-        downloader = SwarmDownloader(
-            tasks=tasks,
-            adapter=adapter,
-            num_workers=num_workers,
-            skip_existing=skip_existing,
-            reuse_jobs=reuse_jobs,
-            max_retries=max_retries,
-        )
 
-        import threading as _thr
+        # Redirect stdout/stderr to /dev/null while curses is active.
+        # Libraries (cdsapi, urllib3, ecmwf-datastores) may write directly
+        # to stdout/stderr via loggers or print(), which corrupts the
+        # curses display.  All meaningful output goes through the adapter.
+        _saved_stdout = sys.stdout
+        _saved_stderr = sys.stderr
+        _devnull = open(os.devnull, "w")
+        sys.stdout = _devnull
+        sys.stderr = _devnull
 
-        download_thread = _thr.Thread(
-            target=_run_download, args=(downloader,), daemon=True
-        )
-        download_thread.start()
-
-        def _process_key(key):
-            """Handle a single key press. Returns True to quit."""
-            if tui.handle_checksum_key(key):
-                return False
-            if key == ord("q"):
-                downloader.cancel()
-                tui.set_status_line("Cancelling...")
-                return True
-            elif key == curses.KEY_RESIZE:
-                tui.handle_resize()
-            elif key == curses.KEY_UP:
-                tui.select_up()
-            elif key == curses.KEY_DOWN:
-                tui.select_down()
-            elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
-                if tui._view_mode == "logs":
-                    tui.close_log_view()
-                else:
-                    tui.open_log_view()
-            elif key == ord("a"):
-                if tui._view_mode == "params":
-                    tui.close_fullscreen_view()
-                elif tui._view_mode == "table":
-                    tui.open_params_view()
-            elif key == 27:  # Escape
-                tui.close_fullscreen_view()
-            elif key == curses.KEY_PPAGE:
-                tui.page_up()
-            elif key == curses.KEY_NPAGE:
-                tui.page_down()
-            elif key == curses.KEY_HOME:
-                tui.log_home()
-            elif key == curses.KEY_END:
-                tui.log_end()
-            elif key == curses.KEY_MOUSE:
-                try:
-                    mouse_event = curses.getmouse()
-                    tui.handle_mouse(mouse_event)
-                except curses.error:
-                    pass
-            return False
-
-        # Input loop: poll at ~20fps so elapsed column ticks smoothly
-        stdscr.timeout(50)
         try:
-            while download_thread.is_alive():
-                try:
-                    key = stdscr.getch()
-                except curses.error:
-                    key = -1
-                if key != -1:
-                    if _process_key(key):
-                        break
-                    # Drain any remaining buffered keys before refreshing
-                    stdscr.nodelay(True)
-                    while True:
-                        try:
-                            k = stdscr.getch()
-                        except curses.error:
-                            break
-                        if k == -1:
-                            break
-                        if _process_key(k):
-                            break
-                tui.refresh()
-        except KeyboardInterrupt:
-            downloader.cancel()
-            tui.set_status_line("Interrupted \u2014 cancelling...")
+            adapter = CursesAdapter(tui)
+            if log_file:
+                adapter = LoggingAdapter(adapter, log_file)
+            downloader = SwarmDownloader(
+                tasks=tasks,
+                adapter=adapter,
+                num_workers=num_workers,
+                skip_existing=skip_existing,
+                reuse_jobs=reuse_jobs,
+                max_retries=max_retries,
+            )
 
-        download_thread.join(timeout=10)
-        results = _download_result[0]
+            import threading as _thr
 
-        if results is None:
-            tui.set_status_line("Cancelled. Press any key to exit...")
-        else:
-            failed = sum(1 for r in results if not r.success)
-            if failed:
-                tui.set_status_line(f"Done ({failed} failed). Press any key to exit...")
+            download_thread = _thr.Thread(
+                target=_run_download, args=(downloader,), daemon=True
+            )
+            download_thread.start()
+
+            def _process_key(key):
+                """Handle a single key press. Returns True to quit."""
+                if tui.handle_checksum_key(key):
+                    return False
+                if key == ord("q"):
+                    downloader.cancel()
+                    tui.set_status_line("Cancelling...")
+                    return True
+                elif key == curses.KEY_RESIZE:
+                    tui.handle_resize()
+                elif key == curses.KEY_UP:
+                    tui.select_up()
+                elif key == curses.KEY_DOWN:
+                    tui.select_down()
+                elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
+                    if tui._view_mode == "logs":
+                        tui.close_log_view()
+                    else:
+                        tui.open_log_view()
+                elif key == ord("a"):
+                    if tui._view_mode == "params":
+                        tui.close_fullscreen_view()
+                    elif tui._view_mode == "table":
+                        tui.open_params_view()
+                elif key == 27:  # Escape
+                    tui.close_fullscreen_view()
+                elif key == curses.KEY_PPAGE:
+                    tui.page_up()
+                elif key == curses.KEY_NPAGE:
+                    tui.page_down()
+                elif key == curses.KEY_HOME:
+                    tui.log_home()
+                elif key == curses.KEY_END:
+                    tui.log_end()
+                elif key == curses.KEY_MOUSE:
+                    try:
+                        mouse_event = curses.getmouse()
+                        tui.handle_mouse(mouse_event)
+                    except curses.error:
+                        pass
+                return False
+
+            # Input loop: poll at ~20fps so elapsed column ticks smoothly
+            stdscr.timeout(50)
+            try:
+                while download_thread.is_alive():
+                    try:
+                        key = stdscr.getch()
+                    except curses.error:
+                        key = -1
+                    if key != -1:
+                        if _process_key(key):
+                            break
+                        # Drain any remaining buffered keys before refreshing
+                        stdscr.nodelay(True)
+                        while True:
+                            try:
+                                k = stdscr.getch()
+                            except curses.error:
+                                break
+                            if k == -1:
+                                break
+                            if _process_key(k):
+                                break
+                        stdscr.timeout(50)
+                    tui.refresh()
+            except KeyboardInterrupt:
+                downloader.cancel()
+                tui.set_status_line("Interrupted \u2014 cancelling...")
+
+            download_thread.join(timeout=10)
+            results = _download_result[0]
+
+            if results is None:
+                tui.set_status_line("Cancelled. Press any key to exit...")
             else:
-                tui.set_status_line("Done! Press any key to exit...")
-        tui.refresh()
-        stdscr.timeout(-1)
-        stdscr.getch()
+                failed = sum(1 for r in results if not r.success)
+                if failed:
+                    tui.set_status_line(
+                        f"Done ({failed} failed). Press any key to exit..."
+                    )
+                else:
+                    tui.set_status_line("Done! Press any key to exit...")
+            tui.refresh()
+            stdscr.timeout(-1)
+            stdscr.getch()
+        finally:
+            sys.stdout = _saved_stdout
+            sys.stderr = _saved_stderr
+            _devnull.close()
 
     _download_result: list = [None]
 

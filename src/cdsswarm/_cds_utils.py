@@ -149,8 +149,8 @@ def parse_request_id(message: str) -> str | None:
 
 
 def silence_loggers():
-    """Silence cdsapi/urllib3/requests loggers to prevent duplicate output."""
-    for name in ("cdsapi", "urllib3", "requests"):
+    """Silence library loggers to prevent output that corrupts the TUI."""
+    for name in ("cdsapi", "urllib3", "requests", "ecmwf"):
         lgr = logging.getLogger(name)
         lgr.handlers.clear()
         lgr.addHandler(logging.NullHandler())

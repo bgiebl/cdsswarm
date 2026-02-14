@@ -14,9 +14,11 @@ from cdsswarm._cds_metadata import (
     QoSData,
     _parse_job_metadata,
     _parse_qos,
+    compute_file_hash,
     compute_md5,
     fetch_job_metadata,
     fetch_job_results,
+    parse_multihash,
     verify_checksum,
 )
 
@@ -167,8 +169,76 @@ class TestComputeMd5:
             os.unlink(path)
 
 
+class TestParseMultihash:
+    def test_sha256(self):
+        digest = hashlib.sha256(b"hello").digest()
+        mh_hex = "1220" + digest.hex()
+        algo, parsed_digest = parse_multihash(mh_hex)
+        assert algo == "sha256"
+        assert parsed_digest == digest
+
+    def test_sha1(self):
+        digest = hashlib.sha1(b"hello").digest()
+        mh_hex = "1114" + digest.hex()
+        algo, parsed_digest = parse_multihash(mh_hex)
+        assert algo == "sha1"
+        assert parsed_digest == digest
+
+    def test_md5_varint(self):
+        """MD5 code 0xd5 requires two-byte varint encoding."""
+        digest = hashlib.md5(b"hello").digest()
+        # 0xd5 as unsigned varint = bytes d5 01; length 16 = 10
+        mh_hex = "d50110" + digest.hex()
+        algo, parsed_digest = parse_multihash(mh_hex)
+        assert algo == "md5"
+        assert parsed_digest == digest
+
+    def test_unsupported_code(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="unsupported"):
+            parse_multihash("ff0400000000")
+
+
+class TestComputeFileHash:
+    def test_sha256(self):
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"test data")
+            path = f.name
+        try:
+            result = compute_file_hash(path, "sha256")
+            assert result == hashlib.sha256(b"test data").digest()
+        finally:
+            os.unlink(path)
+
+
 class TestVerifyChecksum:
-    def test_pass(self):
+    def test_pass_sha256_multihash(self):
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"test data")
+            f.flush()
+            path = f.name
+        try:
+            digest = hashlib.sha256(b"test data").digest()
+            expected = "1220" + digest.hex()
+            assert verify_checksum(path, expected) is True
+        finally:
+            os.unlink(path)
+
+    def test_fail_sha256_multihash(self):
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"test data")
+            f.flush()
+            path = f.name
+        try:
+            wrong_digest = hashlib.sha256(b"other data").digest()
+            expected = "1220" + wrong_digest.hex()
+            assert verify_checksum(path, expected) is False
+        finally:
+            os.unlink(path)
+
+    def test_fallback_bare_md5(self):
+        """Falls back to bare MD5 hex for non-multihash strings."""
         with tempfile.NamedTemporaryFile(delete=False) as f:
             f.write(b"test data")
             f.flush()
@@ -179,7 +249,7 @@ class TestVerifyChecksum:
         finally:
             os.unlink(path)
 
-    def test_fail(self):
+    def test_fail_bare_md5(self):
         with tempfile.NamedTemporaryFile(delete=False) as f:
             f.write(b"test data")
             f.flush()
