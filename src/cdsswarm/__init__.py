@@ -36,7 +36,7 @@ def download(
     tasks: list[Task],
     num_workers: int = 4,
     skip_existing: bool = True,
-    reuse_jobs: bool = False,
+    reuse_jobs: bool = True,
     max_retries: int = 3,
     on_message=None,
 ) -> list[Result]:

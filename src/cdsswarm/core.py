@@ -86,7 +86,7 @@ class SwarmDownloader:
         adapter: OutputAdapter,
         num_workers: int = 4,
         skip_existing: bool = True,
-        reuse_jobs: bool = False,
+        reuse_jobs: bool = True,
         max_retries: int = 3,
     ):
         self._all_tasks = list(tasks)

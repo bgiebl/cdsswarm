@@ -228,7 +228,7 @@ Download multiple CDS API requests concurrently.
 | `tasks` | `list[Task]` | required | List of download tasks |
 | `num_workers` | `int` | `4` | Number of parallel workers |
 | `skip_existing` | `bool` | `True` | Skip files that already exist |
-| `reuse_jobs` | `bool` | `False` | Reuse existing CDS jobs with matching parameters |
+| `reuse_jobs` | `bool` | `True` | Reuse existing CDS jobs with matching parameters |
 | `max_retries` | `int` | `3` | Max retry attempts per task (1 to disable) |
 | `on_message` | `callable` | `None` | Callback `fn(message: str)` for status updates |
 
