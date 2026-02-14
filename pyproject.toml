@@ -35,6 +35,7 @@ yaml = ["pyyaml"]
 dev = [
     "pytest",
     "pytest-asyncio",
+    "pytest-cov",
     "pyyaml",
     "pre-commit",
 ]

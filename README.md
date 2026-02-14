@@ -1,5 +1,8 @@
 # cdsswarm
 
+[![CI](https://github.com/bgiebl/cdsswarm/actions/workflows/ci.yml/badge.svg)](https://github.com/bgiebl/cdsswarm/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/bgiebl/cdsswarm/branch/main/graph/badge.svg)](https://codecov.io/gh/bgiebl/cdsswarm)
+
 Concurrent [CDS API](https://cds.climate.copernicus.eu/) downloader with an interactive Textual TUI and script mode.
 
 Submit multiple CDS API requests and download them in parallel with a configurable number of workers. Monitor progress through an interactive terminal UI with an htop-style worker table, or run headless in script mode for CI/cron jobs.
