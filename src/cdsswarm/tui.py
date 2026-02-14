@@ -137,6 +137,20 @@ class CursesTUI:
         self._log_scroll: int = 0
         self._params_scroll: int = 0
 
+        # Files tab state
+        self._active_tab: str = "workers"
+        self._all_tasks: list = []
+        self._file_status: dict[str, str] = {}
+        self._file_worker: dict[str, int | None] = {}
+        self._file_error: dict[str, str] = {}
+        self._target_to_idx: dict[str, int] = {}
+        self._selected_file: int = 0
+        self._files_scroll: int = 0
+        self._row_file_map: dict[int, int] = {}
+        self._file_dl_bytes: dict[str, int] = {}
+        self._file_dl_total: dict[str, int] = {}
+        self._worker_to_target: dict[int, str] = {}
+
     def start(self, stdscr):
         self._stdscr = stdscr
         curses.curs_set(0)
@@ -189,8 +203,13 @@ class CursesTUI:
             hints = "[Esc] back  [↑/↓] scroll  [PgUp/PgDn] page  [q] quit"
             title = f" Worker {wid} — Parameters"
         else:
-            hints = "[q] quit  [↑/↓] select  [Enter] logs"
-            title = f" {self._title}"
+            if self._active_tab == "workers":
+                tab_text = "[Workers]  Files"
+                hints = "[Tab] switch  [q] quit  [↑/↓] select  [Enter] logs"
+            else:
+                tab_text = " Workers  [Files]"
+                hints = "[Tab] switch  [q] quit  [↑/↓] select"
+            title = f" {self._title}  {tab_text}"
         header_text = title.ljust(width - 1)
         scr.addnstr(
             0, 0, header_text, width - 1, curses.color_pair(_CP_HEADER) | curses.A_BOLD
@@ -387,6 +406,283 @@ class CursesTUI:
             ("DL %", self._COL_DL_PCT),
             ("Request ID", req_id_width),
         ]
+
+    def _files_column_specs(self, width):
+        """Return list of (label, col_width) for the files table columns."""
+        _COL_NUM = 5
+        _COL_STATUS = 12
+        _COL_FILENAME = 20
+        _COL_SIZE = 10
+        _COL_WORKER = 7
+        _COL_DL_PCT = 7
+        fixed = (
+            _COL_NUM
+            + _COL_STATUS
+            + _COL_FILENAME
+            + _COL_SIZE
+            + _COL_WORKER
+            + _COL_DL_PCT
+            + 6
+        )
+        dataset_width = max(10, width - fixed)
+        return [
+            ("#", _COL_NUM),
+            ("Status", _COL_STATUS),
+            ("Filename", _COL_FILENAME),
+            ("Dataset", dataset_width),
+            ("Size", _COL_SIZE),
+            ("Worker", _COL_WORKER),
+            ("DL %", _COL_DL_PCT),
+        ]
+
+    def _draw_files_info_panel(self, width):
+        """Draw the info panel for the selected file (rows 1-14) with box drawing."""
+        scr = self._stdscr
+        info_attr = 0
+        box_w = width - 1
+        inner_w = max(1, box_w - 2)
+
+        num_files = len(self._all_tasks)
+
+        if self._all_tasks and 0 <= self._selected_file < num_files:
+            task = self._all_tasks[self._selected_file]
+            target = task.target
+            filename = task.label
+            status = self._file_status.get(target, "pending")
+            wid = self._file_worker.get(target)
+            dataset = task.dataset
+            params = task.request
+        else:
+            filename = "—"
+            status = "—"
+            wid = None
+            dataset = "—"
+            target = "—"
+            params = {}
+
+        def _hline(row, left, right, junctions=None):
+            chars = list("─" * inner_w)
+            if junctions:
+                for pos, ch in junctions:
+                    if 0 <= pos < inner_w:
+                        chars[pos] = ch
+            line = left + "".join(chars) + right
+            scr.move(row, 0)
+            scr.clrtoeol()
+            scr.addnstr(row, 0, line[:box_w], box_w, info_attr)
+
+        def _content(row, text, attr=0):
+            padded = text[:inner_w].ljust(inner_w)
+            line = "│" + padded + "│"
+            scr.move(row, 0)
+            scr.clrtoeol()
+            scr.addnstr(row, 0, line[:box_w], box_w, info_attr | attr)
+
+        # Row 2: Files badge + status + worker
+        files_badge = f" Files ({num_files}) "
+        worker_info = f"Worker: {wid}" if wid is not None else ""
+        row2_text = f"{files_badge} │ Status: {status} │ {worker_info}"
+        row2_seps = [i for i, ch in enumerate(row2_text) if ch == "│"]
+
+        # Summary counts
+        counts: dict[str, int] = {}
+        for s in self._file_status.values():
+            counts[s] = counts.get(s, 0) + 1
+        count_parts = []
+        for key in ["cached", "pending", "active", "successful", "failed"]:
+            if counts.get(key, 0) > 0:
+                count_parts.append(f"{counts[key]} {key}")
+        summary = " | ".join(count_parts) if count_parts else "—"
+
+        # Row 8: target dir + dataset
+        dest_dir = os.path.dirname(target) if target != "—" else "—"
+        row8_text = f" {dest_dir} │ {dataset}"
+        row8_seps = [i for i, ch in enumerate(row8_text) if ch == "│"]
+
+        # Row 1: top border
+        _hline(1, "┌", "┐", [(p, "┬") for p in row2_seps])
+
+        # Row 2: Files badge + status + worker
+        _content(2, row2_text)
+        scr.addnstr(
+            2,
+            1,
+            files_badge,
+            min(len(files_badge), inner_w),
+            curses.color_pair(_CP_WORKER_BADGE) | curses.A_BOLD,
+        )
+
+        # Row 3: divider
+        _hline(3, "├", "┤", [(p, "┴") for p in row2_seps])
+
+        # Row 4: Summary counts
+        _content(4, f" {summary}")
+
+        # Row 5: divider
+        _hline(5, "├", "┤")
+
+        # Row 6: Filename
+        _content(6, f" Filename: {filename}")
+
+        # Row 7: divider
+        _hline(7, "├", "┤", [(p, "┬") for p in row8_seps])
+
+        # Row 8: Target + Dataset
+        _content(8, row8_text)
+
+        # Row 9: divider
+        _hline(9, "├", "┤", [(p, "┴") for p in row8_seps])
+
+        # Rows 10-13: Params
+        if params:
+            param_str = ", ".join(f"{k}={v}" for k, v in params.items())
+        else:
+            param_str = "—"
+
+        line_width = max(10, inner_w - 1)
+        wrapped = textwrap.wrap(param_str, width=line_width) or [param_str]
+
+        for i in range(self._INFO_PANEL_PARAM_LINES):
+            row = 10 + i
+            if i < len(wrapped):
+                text = f" {wrapped[i]}"
+            else:
+                text = ""
+            _content(row, text, curses.A_DIM)
+
+        # Row 14: bottom border
+        _hline(14, "└", "┘")
+
+    def _draw_files_column_headers(self, width):
+        """Draw column header bar for the files table."""
+        scr = self._stdscr
+        row = self.HEADER_ROWS - 1
+        scr.move(row, 0)
+        scr.clrtoeol()
+        cols = self._files_column_specs(width)
+        parts = []
+        for label, w in cols:
+            parts.append(label[:w].ljust(w))
+        header_line = " ".join(parts).ljust(width - 1)
+        scr.addnstr(
+            row,
+            0,
+            header_line,
+            width - 1,
+            curses.color_pair(_CP_COL_HEADER) | curses.A_BOLD,
+        )
+
+    def _draw_files_table(self, width, available_height):
+        """Draw the files table rows with scroll."""
+        scr = self._stdscr
+        self._row_file_map.clear()
+
+        num_files = len(self._all_tasks)
+        row_entries = list(range(num_files))
+
+        max_scroll = max(0, num_files - available_height)
+        self._files_scroll = max(0, min(self._files_scroll, max_scroll))
+        visible = row_entries[
+            self._files_scroll : self._files_scroll + available_height
+        ]
+
+        cols = self._files_column_specs(width)
+
+        for i, fid in enumerate(visible):
+            screen_row = self.HEADER_ROWS + i
+            scr.move(screen_row, 0)
+            scr.clrtoeol()
+            self._row_file_map[screen_row] = fid
+            is_selected = fid == self._selected_file
+            self._draw_file_row(screen_row, fid, is_selected, cols, width)
+
+        for i in range(len(visible), available_height):
+            screen_row = self.HEADER_ROWS + i
+            scr.move(screen_row, 0)
+            scr.clrtoeol()
+
+    def _draw_file_row(self, screen_row, fid, is_selected, cols, width):
+        """Draw a single file row in the files table."""
+        scr = self._stdscr
+        task = self._all_tasks[fid]
+        target = task.target
+        status = self._file_status.get(target, "pending")
+
+        indicator = "▸" if is_selected else " "
+        num_str = f"{indicator}{fid}"
+        filename = task.label
+        dataset = task.dataset
+        wid = self._file_worker.get(target)
+
+        dl_total = self._file_dl_total.get(target, 0)
+        size_str = _format_size(dl_total) if dl_total > 0 else "—"
+
+        worker_str = str(wid) if wid is not None else "—"
+
+        dl_bytes = self._file_dl_bytes.get(target, 0)
+        if dl_total > 0:
+            pct = int(dl_bytes * 100 / dl_total)
+            dl_pct = f"{pct}%"
+            if status == "successful":
+                dl_pct = dl_pct + " ✓"
+        else:
+            dl_pct = "—"
+
+        values = [num_str, status, filename, dataset, size_str, worker_str, dl_pct]
+
+        row_attr = curses.color_pair(_CP_SELECTED_ROW) if is_selected else 0
+
+        col_pos = 0
+        for idx, ((label, w), val) in enumerate(zip(cols, values)):
+            if idx > 0 and col_pos < width - 1:
+                scr.addnstr(screen_row, col_pos, " ", 1, row_attr)
+                col_pos += 1
+
+            cell_text = val[:w].ljust(w)
+            remaining = width - col_pos - 1
+            if remaining <= 0:
+                break
+
+            if label == "Status" and not is_selected:
+                status_colors = {
+                    "active": _CP_STATUS_RUNNING,
+                    "successful": _CP_STATUS_SUCCESS,
+                    "failed": _CP_STATUS_FAILED,
+                }
+                color_pair = status_colors.get(status, 0)
+                if status == "cached":
+                    scr.addnstr(
+                        screen_row, col_pos, cell_text, min(w, remaining), curses.A_DIM
+                    )
+                elif color_pair:
+                    scr.addnstr(
+                        screen_row,
+                        col_pos,
+                        cell_text,
+                        min(w, remaining),
+                        curses.color_pair(color_pair),
+                    )
+                else:
+                    scr.addnstr(
+                        screen_row, col_pos, cell_text, min(w, remaining), row_attr
+                    )
+            elif label == "DL %" and status == "successful" and not is_selected:
+                scr.addnstr(
+                    screen_row,
+                    col_pos,
+                    cell_text,
+                    min(w, remaining),
+                    curses.color_pair(_CP_GREEN_TEXT),
+                )
+            else:
+                cell_attr = row_attr
+                if status == "cached" and not is_selected:
+                    cell_attr = curses.A_DIM
+                scr.addnstr(
+                    screen_row, col_pos, cell_text, min(w, remaining), cell_attr
+                )
+
+            col_pos += w
 
     def _draw_table(self, width, available_height):
         scr = self._stdscr
@@ -760,6 +1056,9 @@ class CursesTUI:
                 self._log_scroll = max(0, self._log_scroll - 1)
             elif self._view_mode == "params":
                 self._params_scroll = max(0, self._params_scroll - 1)
+            elif self._active_tab == "files":
+                self._selected_file = max(0, self._selected_file - 1)
+                self._ensure_selected_file_visible()
             else:
                 self._selected_worker = max(0, self._selected_worker - 1)
                 self._ensure_selected_visible()
@@ -771,6 +1070,10 @@ class CursesTUI:
                 self._log_scroll += 1  # clamped in _draw_log_view
             elif self._view_mode == "params":
                 self._params_scroll += 1  # clamped in _draw_params_view
+            elif self._active_tab == "files":
+                max_file = max(0, len(self._all_tasks) - 1)
+                self._selected_file = min(max_file, self._selected_file + 1)
+                self._ensure_selected_file_visible()
             else:
                 self._selected_worker = min(
                     self._num_workers - 1, self._selected_worker + 1
@@ -862,26 +1165,39 @@ class CursesTUI:
             if self._view_mode != "table":
                 return
             _, mx, my, _, bstate = mouse_event
-            if bstate & curses.BUTTON1_CLICKED:
-                wid = self._row_worker_map.get(my)
-                if wid is not None:
-                    self._selected_worker = wid
-            elif bstate & curses.BUTTON1_DOUBLE_CLICKED:
-                wid = self._row_worker_map.get(my)
-                if wid is not None:
-                    self._selected_worker = wid
-                    self._view_mode = "logs"
-                    self._log_scroll = max(0, len(self._worker_logs[wid]) - 1)
-            elif bstate & curses.BUTTON4_PRESSED:
-                # Scroll up
-                self._selected_worker = max(0, self._selected_worker - 1)
-                self._ensure_selected_visible()
-            elif bstate & curses.BUTTON5_PRESSED:
-                # Scroll down
-                self._selected_worker = min(
-                    self._num_workers - 1, self._selected_worker + 1
-                )
-                self._ensure_selected_visible()
+            if self._active_tab == "files":
+                if bstate & curses.BUTTON1_CLICKED:
+                    fid = self._row_file_map.get(my)
+                    if fid is not None:
+                        self._selected_file = fid
+                elif bstate & curses.BUTTON4_PRESSED:
+                    self._selected_file = max(0, self._selected_file - 1)
+                    self._ensure_selected_file_visible()
+                elif bstate & curses.BUTTON5_PRESSED:
+                    max_file = max(0, len(self._all_tasks) - 1)
+                    self._selected_file = min(max_file, self._selected_file + 1)
+                    self._ensure_selected_file_visible()
+            else:
+                if bstate & curses.BUTTON1_CLICKED:
+                    wid = self._row_worker_map.get(my)
+                    if wid is not None:
+                        self._selected_worker = wid
+                elif bstate & curses.BUTTON1_DOUBLE_CLICKED:
+                    wid = self._row_worker_map.get(my)
+                    if wid is not None:
+                        self._selected_worker = wid
+                        self._view_mode = "logs"
+                        self._log_scroll = max(0, len(self._worker_logs[wid]) - 1)
+                elif bstate & curses.BUTTON4_PRESSED:
+                    # Scroll up
+                    self._selected_worker = max(0, self._selected_worker - 1)
+                    self._ensure_selected_visible()
+                elif bstate & curses.BUTTON5_PRESSED:
+                    # Scroll down
+                    self._selected_worker = min(
+                        self._num_workers - 1, self._selected_worker + 1
+                    )
+                    self._ensure_selected_visible()
             self._do_refresh()
 
     def _ensure_selected_visible(self):
@@ -896,6 +1212,19 @@ class CursesTUI:
                     self._table_scroll = row_idx
                 elif row_idx >= self._table_scroll + available:
                     self._table_scroll = row_idx - available + 1
+
+    def _ensure_selected_file_visible(self):
+        """Adjust files_scroll so the selected file row is visible."""
+        row_idx = self._selected_file
+
+        if self._stdscr:
+            height, _ = self._stdscr.getmaxyx()
+            available = height - self.HEADER_ROWS - self.PROGRESS_ROWS
+            if available > 0:
+                if row_idx < self._files_scroll:
+                    self._files_scroll = row_idx
+                elif row_idx >= self._files_scroll + available:
+                    self._files_scroll = row_idx - available + 1
 
     # -- Thread-safe public methods --
 
@@ -946,6 +1275,11 @@ class CursesTUI:
             if 0 <= worker_id < self._num_workers:
                 self._worker_dl_bytes[worker_id] = downloaded_bytes
                 self._worker_dl_total[worker_id] = total_bytes
+                # Also update file-level tracking
+                target = self._worker_to_target.get(worker_id)
+                if target and target in self._file_dl_bytes:
+                    self._file_dl_bytes[target] = downloaded_bytes
+                    self._file_dl_total[target] = total_bytes
                 self._do_refresh()
 
     def set_worker_server_progress(self, worker_id, progress):
@@ -1069,6 +1403,62 @@ class CursesTUI:
                 self._worker_dataset_title[worker_id] = ""
                 self._worker_request_labels[worker_id] = None
 
+    def toggle_tab(self):
+        """Switch between workers and files tabs."""
+        with self._lock:
+            if self._active_tab == "workers":
+                self._active_tab = "files"
+            else:
+                self._active_tab = "workers"
+            self._do_refresh()
+
+    def init_file_list(self, tasks, skipped_targets):
+        """Initialize the file list from all tasks and which targets were skipped."""
+        with self._lock:
+            self._all_tasks = list(tasks)
+            self._file_status = {}
+            self._file_worker = {}
+            self._file_error = {}
+            self._target_to_idx = {}
+            self._file_dl_bytes = {}
+            self._file_dl_total = {}
+            self._worker_to_target = {}
+            for i, task in enumerate(tasks):
+                self._target_to_idx[task.target] = i
+                if task.target in skipped_targets:
+                    self._file_status[task.target] = "cached"
+                else:
+                    self._file_status[task.target] = "pending"
+                self._file_worker[task.target] = None
+                self._file_error[task.target] = ""
+                self._file_dl_bytes[task.target] = 0
+                self._file_dl_total[task.target] = 0
+            self._do_refresh()
+
+    def set_file_active(self, target, worker_id):
+        """Mark a file as active on a specific worker."""
+        with self._lock:
+            if target in self._file_status:
+                self._file_status[target] = "active"
+                self._file_worker[target] = worker_id
+                self._worker_to_target[worker_id] = target
+                self._do_refresh()
+
+    def set_file_completed(self, target, success, error=""):
+        """Mark a file as completed (successful or failed)."""
+        with self._lock:
+            if target in self._file_status:
+                self._file_status[target] = "successful" if success else "failed"
+                if not success:
+                    self._file_error[target] = error
+                # Snapshot size data from the worker
+                wid = self._file_worker.get(target)
+                if wid is not None and 0 <= wid < self._num_workers:
+                    self._file_dl_bytes[target] = self._worker_dl_bytes[wid]
+                    self._file_dl_total[target] = self._worker_dl_total[wid]
+                    self._worker_to_target.pop(wid, None)
+                self._do_refresh()
+
     def update_progress(self, completed, total, skipped):
         with self._lock:
             if self._eta_start_time is None and total > 0:
@@ -1131,10 +1521,16 @@ class CursesTUI:
                 self._draw_progress_bar(height, width)
             else:
                 self._draw_header(width)
-                self._draw_info_panel(width)
-                self._draw_column_headers(width)
-                available_height = height - self.HEADER_ROWS - self.PROGRESS_ROWS
-                self._draw_table(width, available_height)
+                if self._active_tab == "files":
+                    self._draw_files_info_panel(width)
+                    self._draw_files_column_headers(width)
+                    available_height = height - self.HEADER_ROWS - self.PROGRESS_ROWS
+                    self._draw_files_table(width, available_height)
+                else:
+                    self._draw_info_panel(width)
+                    self._draw_column_headers(width)
+                    available_height = height - self.HEADER_ROWS - self.PROGRESS_ROWS
+                    self._draw_table(width, available_height)
                 self._draw_progress_bar(height, width)
             self._stdscr.noutrefresh()
             curses.doupdate()

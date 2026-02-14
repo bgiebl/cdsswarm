@@ -131,3 +131,34 @@ class TestCursesAdapterNewCallbacks:
         adapter = CursesAdapter(tui)
         adapter.on_qos_update(5220, 400, 400)
         tui.set_qos_data.assert_called_once_with(5220, 400, 400)
+
+    def test_on_tasks_initialized(self):
+        tui = MagicMock()
+        adapter = CursesAdapter(tui)
+        tasks = [Task("ds", {}, "/f1"), Task("ds", {}, "/f2")]
+        skipped = {"/f1"}
+        adapter.on_tasks_initialized(tasks, skipped)
+        tui.init_file_list.assert_called_once_with(tasks, skipped)
+
+    def test_on_task_started_sets_file_active(self):
+        tui = MagicMock()
+        adapter = CursesAdapter(tui)
+        task = Task("ds", {}, "/path/to/file.grib")
+        adapter.on_task_started(0, task)
+        tui.set_file_active.assert_called_once_with("/path/to/file.grib", 0)
+
+    def test_on_task_completed_sets_file_completed(self):
+        tui = MagicMock()
+        adapter = CursesAdapter(tui)
+        task = Task("ds", {}, "/path/to/file.grib")
+        adapter.on_task_completed(0, task, True)
+        tui.set_file_completed.assert_called_once_with("/path/to/file.grib", True, "")
+
+    def test_on_task_completed_failure_sets_file_completed(self):
+        tui = MagicMock()
+        adapter = CursesAdapter(tui)
+        task = Task("ds", {}, "/path/to/file.grib")
+        adapter.on_task_completed(0, task, False, "timeout")
+        tui.set_file_completed.assert_called_once_with(
+            "/path/to/file.grib", False, "timeout"
+        )

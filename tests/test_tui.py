@@ -6,12 +6,14 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 
+from cdsswarm.core import Task
 from cdsswarm.tui import (
     CursesTUI,
     _CP_COL_HEADER,
     _CP_GREEN_TEXT,
     _CP_SELECTED_ROW,
     _CP_STATUS_RUNNING,
+    _CP_STATUS_SUCCESS,
     _format_eta,
     _format_size,
 )
@@ -1247,3 +1249,280 @@ class TestChecksumDialog:
         ):
             tui._render()
             dcd.assert_called_once()
+
+
+def _make_tasks(n=5):
+    """Create n Task objects for testing."""
+    return [
+        Task(
+            dataset=f"dataset-{i}",
+            request={"variable": f"var_{i}", "year": "2024"},
+            target=f"/data/file_{i}.grib",
+        )
+        for i in range(n)
+    ]
+
+
+class TestFilesTab:
+    """Tests for the Files tab feature."""
+
+    def _make_tui(self, num_workers=3, height=35, width=120):
+        tui = CursesTUI(num_workers=num_workers)
+        stdscr = _mock_stdscr(height, width)
+        tui._stdscr = stdscr
+        tui._last_size = (height, width)
+        return tui, stdscr
+
+    def test_init_file_list(self):
+        tui, _ = self._make_tui()
+        tasks = _make_tasks(5)
+        skipped = {tasks[0].target, tasks[2].target}
+        tui.init_file_list(tasks, skipped)
+        assert len(tui._all_tasks) == 5
+        assert tui._file_status[tasks[0].target] == "cached"
+        assert tui._file_status[tasks[1].target] == "pending"
+        assert tui._file_status[tasks[2].target] == "cached"
+        assert tui._file_status[tasks[3].target] == "pending"
+        assert tui._file_status[tasks[4].target] == "pending"
+
+    def test_toggle_tab(self):
+        tui, _ = self._make_tui()
+        assert tui._active_tab == "workers"
+        tui.toggle_tab()
+        assert tui._active_tab == "files"
+        tui.toggle_tab()
+        assert tui._active_tab == "workers"
+
+    def test_file_selection_down(self):
+        tui, _ = self._make_tui()
+        tasks = _make_tasks(5)
+        tui.init_file_list(tasks, set())
+        tui._active_tab = "files"
+        assert tui._selected_file == 0
+        with _mock_curses():
+            tui.select_down()
+        assert tui._selected_file == 1
+        with _mock_curses():
+            tui.select_down()
+        assert tui._selected_file == 2
+
+    def test_file_selection_up(self):
+        tui, _ = self._make_tui()
+        tasks = _make_tasks(5)
+        tui.init_file_list(tasks, set())
+        tui._active_tab = "files"
+        tui._selected_file = 3
+        with _mock_curses():
+            tui.select_up()
+        assert tui._selected_file == 2
+        with _mock_curses():
+            tui.select_up()
+        assert tui._selected_file == 1
+
+    def test_file_selection_clamped(self):
+        tui, _ = self._make_tui()
+        tasks = _make_tasks(3)
+        tui.init_file_list(tasks, set())
+        tui._active_tab = "files"
+        tui._selected_file = 0
+        with _mock_curses():
+            tui.select_up()
+        assert tui._selected_file == 0
+        tui._selected_file = 2
+        with _mock_curses():
+            tui.select_down()
+        assert tui._selected_file == 2
+
+    def test_set_file_active(self):
+        tui, _ = self._make_tui()
+        tasks = _make_tasks(3)
+        tui.init_file_list(tasks, set())
+        tui.set_file_active(tasks[1].target, 0)
+        assert tui._file_status[tasks[1].target] == "active"
+        assert tui._file_worker[tasks[1].target] == 0
+        assert tui._worker_to_target[0] == tasks[1].target
+
+    def test_set_file_completed_success(self):
+        tui, _ = self._make_tui()
+        tasks = _make_tasks(3)
+        tui.init_file_list(tasks, set())
+        tui.set_file_active(tasks[1].target, 0)
+        tui._worker_dl_bytes[0] = 500
+        tui._worker_dl_total[0] = 1000
+        tui.set_file_completed(tasks[1].target, True)
+        assert tui._file_status[tasks[1].target] == "successful"
+        assert tui._file_dl_bytes[tasks[1].target] == 500
+        assert tui._file_dl_total[tasks[1].target] == 1000
+
+    def test_set_file_completed_failure(self):
+        tui, _ = self._make_tui()
+        tasks = _make_tasks(3)
+        tui.init_file_list(tasks, set())
+        tui.set_file_active(tasks[0].target, 1)
+        tui.set_file_completed(tasks[0].target, False, "timeout")
+        assert tui._file_status[tasks[0].target] == "failed"
+        assert tui._file_error[tasks[0].target] == "timeout"
+
+    def test_draw_files_table_populates_row_file_map(self):
+        tui, stdscr = self._make_tui()
+        tasks = _make_tasks(4)
+        tui.init_file_list(tasks, set())
+        tui._active_tab = "files"
+        with _mock_curses():
+            tui._draw_files_table(120, available_height=20)
+        assert len(tui._row_file_map) == 4
+        assert tui._row_file_map[tui.HEADER_ROWS] == 0
+        assert tui._row_file_map[tui.HEADER_ROWS + 1] == 1
+        assert tui._row_file_map[tui.HEADER_ROWS + 2] == 2
+        assert tui._row_file_map[tui.HEADER_ROWS + 3] == 3
+
+    def test_draw_files_table_shows_filename(self):
+        tui, stdscr = self._make_tui()
+        tasks = _make_tasks(2)
+        tui.init_file_list(tasks, set())
+        tui._active_tab = "files"
+        with _mock_curses():
+            tui._draw_files_table(120, available_height=20)
+        row = tui.HEADER_ROWS
+        texts = [c.args[2] for c in stdscr.addnstr.call_args_list if c.args[0] == row]
+        assert any("file_0.grib" in t for t in texts)
+
+    def test_draw_files_table_status_color(self):
+        tui, stdscr = self._make_tui()
+        tasks = _make_tasks(3)
+        tui.init_file_list(tasks, set())
+        tui._file_status[tasks[1].target] = "successful"
+        tui._active_tab = "files"
+        tui._selected_file = 0  # file 1 is not selected
+        with _mock_curses():
+            tui._draw_files_table(120, available_height=20)
+        row = tui.HEADER_ROWS + 1  # File 1 row
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == row]
+        status_calls = [
+            c for c in calls if "successful" in c.args[2] and len(c.args) > 4
+        ]
+        assert len(status_calls) >= 1
+        assert status_calls[0].args[4] == _CP_STATUS_SUCCESS << 8
+
+    def test_render_files_tab(self):
+        tui, stdscr = self._make_tui()
+        tasks = _make_tasks(3)
+        tui.init_file_list(tasks, set())
+        tui._active_tab = "files"
+        tui._last_size = (0, 0)
+        with (
+            _mock_curses(),
+            patch.object(tui, "_draw_header") as dh,
+            patch.object(tui, "_draw_files_info_panel") as dfip,
+            patch.object(tui, "_draw_files_column_headers") as dfch,
+            patch.object(tui, "_draw_files_table") as dft,
+            patch.object(tui, "_draw_progress_bar") as dpb,
+        ):
+            tui._render()
+            dh.assert_called_once()
+            dfip.assert_called_once()
+            dfch.assert_called_once()
+            dft.assert_called_once()
+            dpb.assert_called_once()
+
+    def test_render_workers_tab_unchanged(self):
+        tui, stdscr = self._make_tui()
+        tui._active_tab = "workers"
+        tui._last_size = (0, 0)
+        with (
+            _mock_curses(),
+            patch.object(tui, "_draw_header") as dh,
+            patch.object(tui, "_draw_info_panel") as dip,
+            patch.object(tui, "_draw_column_headers") as dch,
+            patch.object(tui, "_draw_table") as dt,
+            patch.object(tui, "_draw_progress_bar") as dpb,
+        ):
+            tui._render()
+            dh.assert_called_once()
+            dip.assert_called_once()
+            dch.assert_called_once()
+            dt.assert_called_once()
+            dpb.assert_called_once()
+
+    def test_header_shows_tab_indicators_workers(self):
+        tui, stdscr = self._make_tui()
+        tui._active_tab = "workers"
+        with _mock_curses():
+            tui._draw_header(120)
+        calls = stdscr.addnstr.call_args_list
+        title_text = calls[0].args[2]
+        assert "[Workers]" in title_text
+        assert "Files" in title_text
+
+    def test_header_shows_tab_indicators_files(self):
+        tui, stdscr = self._make_tui()
+        tui._active_tab = "files"
+        with _mock_curses():
+            tui._draw_header(120)
+        calls = stdscr.addnstr.call_args_list
+        title_text = calls[0].args[2]
+        assert "[Files]" in title_text
+        assert "Workers" in title_text
+
+    def test_update_worker_progress_updates_file(self):
+        tui, _ = self._make_tui()
+        tasks = _make_tasks(2)
+        tui.init_file_list(tasks, set())
+        tui.set_file_active(tasks[0].target, 0)
+        tui.update_worker_progress(0, 300, 600)
+        assert tui._file_dl_bytes[tasks[0].target] == 300
+        assert tui._file_dl_total[tasks[0].target] == 600
+
+    def test_mouse_click_files_tab(self):
+        tui, stdscr = self._make_tui(num_workers=2)
+        tasks = _make_tasks(4)
+        tui.init_file_list(tasks, set())
+        tui._active_tab = "files"
+        with _mock_curses():
+            tui._draw_files_table(120, available_height=20)
+        target_row = tui.HEADER_ROWS + 2
+        with _mock_curses():
+            tui.handle_mouse((0, 10, target_row, 0, curses.BUTTON1_CLICKED))
+        assert tui._selected_file == 2
+
+    def test_files_info_panel_shows_summary(self):
+        tui, stdscr = self._make_tui()
+        tasks = _make_tasks(4)
+        tui.init_file_list(tasks, {tasks[0].target})
+        tui._file_status[tasks[1].target] = "active"
+        tui._file_status[tasks[2].target] = "successful"
+        tui._active_tab = "files"
+        with _mock_curses():
+            tui._draw_files_info_panel(120)
+        # Row 4 shows summary counts
+        calls = [c for c in stdscr.addnstr.call_args_list if c.args[0] == 4]
+        texts = [c.args[2] for c in calls]
+        assert any("1 cached" in t for t in texts)
+        assert any("1 pending" in t for t in texts)
+        assert any("1 active" in t for t in texts)
+        assert any("1 successful" in t for t in texts)
+
+    def test_files_column_specs(self):
+        tui = CursesTUI(num_workers=1)
+        cols = tui._files_column_specs(120)
+        assert len(cols) == 7
+        labels = [label for label, _ in cols]
+        assert labels == [
+            "#",
+            "Status",
+            "Filename",
+            "Dataset",
+            "Size",
+            "Worker",
+            "DL %",
+        ]
+
+    def test_ensure_selected_file_visible(self):
+        tui = CursesTUI(num_workers=2)
+        tui._stdscr = _mock_stdscr(height=20, width=120)
+        tasks = _make_tasks(20)
+        tui.init_file_list(tasks, set())
+        tui._selected_file = 15
+        tui._files_scroll = 0
+        tui._ensure_selected_file_visible()
+        assert tui._files_scroll > 0

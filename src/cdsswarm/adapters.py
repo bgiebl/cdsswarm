@@ -68,6 +68,9 @@ class OutputAdapter(ABC):
     def on_qos_update(self, queued: int, running: int, limit: int):
         pass
 
+    def on_tasks_initialized(self, tasks: list[Task], skipped_targets: set[str]):
+        pass
+
 
 class PlainTextAdapter(OutputAdapter):
     """Simple text output for script/non-interactive mode."""
@@ -117,6 +120,9 @@ class CursesAdapter(OutputAdapter):
     def __init__(self, tui: CursesTUI):
         self._tui = tui
 
+    def on_tasks_initialized(self, tasks, skipped_targets):
+        self._tui.init_file_list(tasks, skipped_targets)
+
     def on_task_started(self, worker_id, task):
         self._tui.set_worker_cds_status(worker_id, "accepted")
         self._tui.set_worker_request_id(worker_id, "")
@@ -126,6 +132,7 @@ class CursesAdapter(OutputAdapter):
             worker_id, task.dataset, task.request, task.target
         )
         self._tui.append_worker_log(worker_id, f"Started: {task.label}")
+        self._tui.set_file_active(task.target, worker_id)
 
     def on_task_message(self, worker_id, message):
         cds_status = parse_cds_status(message)
@@ -141,6 +148,7 @@ class CursesAdapter(OutputAdapter):
             self._tui.set_worker_cds_status(worker_id, "failed")
             self._tui.append_worker_log(worker_id, f"Error: {error}")
         self._tui.set_worker_finished(worker_id)
+        self._tui.set_file_completed(task.target, success, error)
 
     def on_progress_update(self, completed, total, skipped):
         self._tui.update_progress(completed, total, skipped)
@@ -195,6 +203,12 @@ class LoggingAdapter(OutputAdapter):
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._log_file.write(f"[{ts}] {line}\n")
         self._log_file.flush()
+
+    def on_tasks_initialized(self, tasks, skipped_targets):
+        self._write(
+            f"tasks initialized: {len(tasks)} total, {len(skipped_targets)} cached"
+        )
+        self._inner.on_tasks_initialized(tasks, skipped_targets)
 
     def on_task_started(self, worker_id, task):
         self._write(f"[worker {worker_id}] started: {task.label}")

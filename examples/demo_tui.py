@@ -13,6 +13,7 @@ import threading
 import time
 import uuid
 
+from cdsswarm.core import Task
 from cdsswarm.tui import CursesTUI
 
 # Simulated filenames
@@ -148,6 +149,7 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
 
     # Queue of tasks to process
     task_queue = []
+    all_task_objects = []
     for i in range(num_tasks):
         tpl = random.choice(FILENAMES)
         fname = tpl.format(random.randint(1, 12))
@@ -183,6 +185,15 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
         task_queue.append(
             (fname, size, request_id, dataset, request_params, request_labels, target)
         )
+        all_task_objects.append(
+            Task(dataset=dataset, request=request_params, target=target)
+        )
+
+    # Initialize file list with a few "cached" entries
+    num_cached = min(3, num_tasks)
+    skipped_targets = {all_task_objects[i].target for i in range(num_cached)}
+    tui.init_file_list(all_task_objects, skipped_targets)
+    tui.update_progress(0, num_tasks - num_cached, num_cached)
 
     active = {}  # worker_id -> state dict
     task_idx = 0
@@ -203,6 +214,7 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
         tui.set_worker_dataset_title(wid, DATASET_TITLES.get(dataset, ""))
         tui.set_worker_request_labels(wid, labels)
         tui.set_worker_server_progress(wid, 0)
+        tui.set_file_active(target, wid)
         # Simulate server timestamps
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         tui.set_worker_server_timestamps(wid, now, "", "")
@@ -212,6 +224,7 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
             "fname": fname,
             "size": size,
             "rid": rid,
+            "target": target,
             "dl_bytes": 0,
             "phase": 0,
             "phase_ticks": 0,
@@ -304,9 +317,14 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
                         tui.append_worker_log(
                             wid, "Expected: d41d8cd98f00b204e9800998ecf8427e"
                         )
+                        tui.set_file_completed(
+                            state["target"], False, "checksum mismatch"
+                        )
                         tui.set_worker_finished(wid)
                         tasks_done += 1
-                        tui.update_progress(tasks_done, num_tasks, 0)
+                        tui.update_progress(
+                            tasks_done, num_tasks - num_cached, num_cached
+                        )
                         state["phase"] = 4
                         state["phase_ticks"] = 0
                         # Open fullscreen dialog (blocks until user presses c/r)
@@ -323,12 +341,16 @@ def _simulate_downloads(tui, num_workers, num_tasks, stop_event):
                     if random.random() < 0.1:
                         tui.set_worker_cds_status(wid, "failed")
                         tui.append_worker_log(wid, "Error: connection timeout")
+                        tui.set_file_completed(
+                            state["target"], False, "connection timeout"
+                        )
                     else:
                         tui.set_worker_checksum_result(wid, True)
                         tui.append_worker_log(wid, f"Completed: {state['fname']}")
+                        tui.set_file_completed(state["target"], True)
                     tui.set_worker_finished(wid)
                     tasks_done += 1
-                    tui.update_progress(tasks_done, num_tasks, 0)
+                    tui.update_progress(tasks_done, num_tasks - num_cached, num_cached)
                     # Enter cooldown phase so finished state is visible
                     state["phase"] = 4
                     state["phase_ticks"] = 0
@@ -383,6 +405,9 @@ def main():
                     stop_event.set()
                     tui.set_status_line("Stopping...")
                     break
+                elif key == 9:  # Tab
+                    if tui._view_mode == "table":
+                        tui.toggle_tab()
                 elif key == curses.KEY_RESIZE:
                     tui.handle_resize()
                 elif key == curses.KEY_UP:
@@ -392,12 +417,12 @@ def main():
                 elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
                     if tui._view_mode == "logs":
                         tui.close_log_view()
-                    else:
+                    elif tui._active_tab == "workers":
                         tui.open_log_view()
                 elif key == ord("a"):
                     if tui._view_mode == "params":
                         tui.close_fullscreen_view()
-                    elif tui._view_mode == "table":
+                    elif tui._view_mode == "table" and tui._active_tab == "workers":
                         tui.open_params_view()
                 elif key == 27:  # Escape
                     tui.close_fullscreen_view()

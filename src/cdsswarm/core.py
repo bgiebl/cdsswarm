@@ -130,6 +130,13 @@ class SwarmDownloader:
         )
         self._adapter.on_progress_update(0, len(pending), skipped)
 
+        skipped_targets = (
+            {t.target for t in self._all_tasks if os.path.exists(t.target)}
+            if self._skip_existing
+            else set()
+        )
+        self._adapter.on_tasks_initialized(self._all_tasks, skipped_targets)
+
         reuse_map: dict[str, str] = {}
         if self._reuse_jobs and pending:
             self._adapter.on_global_message("Checking for reusable CDS jobs...")

@@ -140,6 +140,9 @@ def _run_interactive(
                     downloader.cancel()
                     tui.set_status_line("Cancelling...")
                     return True
+                elif key == 9:  # Tab
+                    if tui._view_mode == "table":
+                        tui.toggle_tab()
                 elif key == curses.KEY_RESIZE:
                     tui.handle_resize()
                 elif key == curses.KEY_UP:
@@ -149,12 +152,12 @@ def _run_interactive(
                 elif key in (ord("\n"), ord("\r"), curses.KEY_ENTER):
                     if tui._view_mode == "logs":
                         tui.close_log_view()
-                    else:
+                    elif tui._active_tab == "workers":
                         tui.open_log_view()
                 elif key == ord("a"):
                     if tui._view_mode == "params":
                         tui.close_fullscreen_view()
-                    elif tui._view_mode == "table":
+                    elif tui._view_mode == "table" and tui._active_tab == "workers":
                         tui.open_params_view()
                 elif key == 27:  # Escape
                     tui.close_fullscreen_view()
