@@ -13,6 +13,7 @@ dependencies = [
     "cdsapi>=0.7",
     "requests",
     "tqdm",
+    "textual>=0.87",
     "tomli>=1.1.0; python_version < '3.11'",
 ]
 
@@ -20,6 +21,7 @@ dependencies = [
 yaml = ["pyyaml"]
 dev = [
     "pytest",
+    "pytest-asyncio",
     "pyyaml",
     "pre-commit",
 ]
