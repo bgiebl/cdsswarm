@@ -365,14 +365,16 @@ async def test_tab_switching():
     """'t' key switches between Workers and Files tabs."""
     app = CdsswarmApp(num_workers=2)
     async with app.run_test() as pilot:
-        from textual.widgets import TabbedContent
-
-        tabs = app.query_one("#tabs", TabbedContent)
-        assert tabs.active == "workers-pane"
+        assert app._active_tab == "workers"
         await pilot.press("t")
-        assert tabs.active == "files-pane"
+        assert app._active_tab == "files"
+        # Worker table should be hidden, files table visible
+        assert app.query_one("#worker-table").has_class("hidden")
+        assert not app.query_one("#files-table").has_class("hidden")
         await pilot.press("t")
-        assert tabs.active == "workers-pane"
+        assert app._active_tab == "workers"
+        assert not app.query_one("#worker-table").has_class("hidden")
+        assert app.query_one("#files-table").has_class("hidden")
 
 
 @pytest.mark.asyncio

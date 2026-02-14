@@ -12,16 +12,15 @@ from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
+from textual.theme import Theme
 from textual.widgets import (
+    Button,
     DataTable,
-    Header,
     RichLog,
     Static,
-    TabbedContent,
-    TabPane,
 )
 
 
@@ -423,8 +422,14 @@ class FilesInfoPanel(Static):
         return "\n".join(lines)
 
 
-class ProgressFooter(Static):
-    """Bottom bar showing overall progress and status."""
+class HeaderBar(Static):
+    """Compact header bar: app title + worker count + clock."""
+
+    pass
+
+
+class MeterBar(Static):
+    """Compact meter area showing progress bar and QoS info."""
 
     def render_progress(
         self,
@@ -445,44 +450,80 @@ class ProgressFooter(Static):
             bar_width = 30
             filled = int(bar_width * grand_done / grand_total)
             bar = "\u2588" * filled + "\u2591" * (bar_width - filled)
-            text = f"[yellow]\\[{bar}] {grand_done}/{grand_total}  {pct:.0f}%[/]"
+            text = f"[bold]Progress[/] [yellow]\\[{bar}][/] {grand_done}/{grand_total}  {pct:.0f}%"
             if skipped:
                 text += f"  ({skipped} cached)"
             if eta_start:
-                import time as _time
-
-                elapsed = _time.monotonic() - eta_start
-                text += f"  Elapsed: {format_eta(elapsed)}"
+                elapsed = time.monotonic() - eta_start
                 if completed > 0:
                     remaining = total - completed
                     eta_seconds = (elapsed / completed) * remaining
-                    text += f"  ETA: {format_eta(eta_seconds)}"
+                    text += f"  ETA {format_eta(eta_seconds)}"
+                else:
+                    text += "  ETA ..."
             elif completed == 0 and total > 0:
-                text += "  ETA: estimating..."
+                text += "  ETA ..."
         else:
             text = "Preparing..."
 
-        # Status line
-        status_line = ""
+        # QoS / status line
+        parts = []
         if qos_queued > 0 or qos_running > 0:
-            qos_text = (
-                f"CDS Server: {qos_queued} queued | {qos_running}/{qos_limit} running"
+            parts.append(
+                f"CDS Server: {qos_queued} queued \u2502 "
+                f"{qos_running}/{qos_limit} running"
             )
-            status_line = f"{qos_text} | {status}" if status else qos_text
-        else:
-            status_line = status
+        if status:
+            parts.append(status)
+        status_line = " \u2502 ".join(parts) if parts else ""
 
         if status_line:
-            text += f"\n{status_line}"
-        else:
-            text += "\n"
+            text += f"\n[dim]{status_line}[/]"
 
         return text
+
+
+class TabStrip(Static):
+    """Lightweight tab selector strip."""
+
+    def on_click(self, event) -> None:
+        # "Workers" occupies roughly x < 10, "Files" x >= 10
+        app = self.app
+        if event.x < 10:
+            if app._active_tab != "workers":
+                app.action_switch_tab()
+        else:
+            if app._active_tab != "files":
+                app.action_switch_tab()
+
+
+class KeyBar(Static):
+    """htop-style key hint bar at the bottom."""
+
+    def on_click(self, event) -> None:
+        # Approximate hit zones for: q Quit | t Tab | Enter Logs | a Params
+        app = self.app
+        x = event.x
+        if x < 10:
+            app.action_quit_app()
+        elif x < 18:
+            app.action_switch_tab()
+        elif x < 31:
+            app._open_worker_logs()
+        else:
+            app.action_open_params()
 
 
 # ---------------------------------------------------------------------------
 # Screens
 # ---------------------------------------------------------------------------
+
+
+class _BackBar(Static):
+    """Static that dismisses the parent screen on click."""
+
+    def on_click(self) -> None:
+        self.screen.dismiss()
 
 
 class LogScreen(Screen):
@@ -499,11 +540,15 @@ class LogScreen(Screen):
         self.initial_logs = logs
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            f" Worker {self.worker_id} \u2014 {self.filename}  [dim][Esc] back[/]",
+        yield _BackBar(
+            f" Worker {self.worker_id} \u2014 {self.filename}",
             id="log-header",
         )
         yield RichLog(id="log-content", wrap=True, highlight=True)
+        yield _BackBar(
+            " [bold white on #444444] Esc [/] Back",
+            id="log-keybar",
+        )
 
     def on_mount(self) -> None:
         log = self.query_one("#log-content", RichLog)
@@ -527,8 +572,8 @@ class ParamsScreen(Screen):
         self.labels = labels
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            f" Worker {self.worker_id} \u2014 Parameters  [dim][Esc] back[/]",
+        yield _BackBar(
+            f" Worker {self.worker_id} \u2014 Parameters",
             id="params-header",
         )
         if self.labels:
@@ -538,6 +583,10 @@ class ParamsScreen(Screen):
         else:
             param_str = "\u2014"
         yield Static(param_str, id="params-content")
+        yield _BackBar(
+            " [bold white on #444444] Esc [/] Back",
+            id="params-keybar",
+        )
 
 
 class ChecksumScreen(ModalScreen[str]):
@@ -567,10 +616,16 @@ class ChecksumScreen(ModalScreen[str]):
                 f"Got:      {actual}",
                 classes="checksum-info",
             )
-            yield Static(
-                "[bold][r] Retry download (Recommended)[/]  |  [c] Continue and ignore",
-                classes="checksum-buttons",
-            )
+            with Horizontal(classes="checksum-buttons"):
+                yield Button(
+                    "Retry (r)",
+                    id="checksum-retry",
+                    variant="error",
+                )
+                yield Button(
+                    "Continue (c)",
+                    id="checksum-continue",
+                )
 
     def _compute_actual(self) -> str:
         try:
@@ -584,6 +639,12 @@ class ChecksumScreen(ModalScreen[str]):
             )
         except Exception:
             return "?"
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "checksum-retry":
+            self.dismiss("retry")
+        elif event.button.id == "checksum-continue":
+            self.dismiss("continue")
 
     def action_continue_download(self) -> None:
         self.dismiss("continue")
@@ -624,53 +685,120 @@ FILES_COLUMNS = [
 # ---------------------------------------------------------------------------
 
 
+HTOP_THEME = Theme(
+    name="htop",
+    primary="#00d4aa",
+    secondary="#16213e",
+    background="#0a0a0a",
+    surface="#0a0a0a",
+    panel="#0f0f0f",
+    boost="#1a1a1a",
+    accent="#00d4aa",
+    dark=True,
+)
+
+
 class CdsswarmApp(App):
     """Textual TUI for cdsswarm concurrent downloads."""
 
     TITLE = "cdsswarm"
     CSS = """
-    Screen {
-        background: $surface;
+    .hidden {
+        display: none;
     }
-    #worker-info, #files-info {
-        height: auto;
-        max-height: 8;
-        border: round $primary;
-        padding: 0 1;
-        margin: 0 0 0 0;
-    }
-    #worker-table, #files-table {
-        height: 1fr;
-    }
-    ProgressFooter {
-        dock: bottom;
-        height: 2;
-        padding: 0 1;
-        background: $boost;
-    }
-    #tabs {
-        height: 1fr;
-    }
-    LogScreen RichLog {
-        height: 1fr;
-    }
-    LogScreen Static#log-header {
+    #header-bar {
+        dock: top;
         height: 1;
-        background: $primary;
-        color: $text;
+        background: #16213e;
+        color: #00d4aa;
         text-style: bold;
         padding: 0 1;
     }
-    ParamsScreen Static#params-header {
+    #meter-bar {
+        height: auto;
+        max-height: 4;
+        border: round #444444;
+        padding: 0 1;
+        margin: 0;
+        background: #0f0f0f;
+    }
+    #tab-strip {
         height: 1;
-        background: $primary;
-        color: $text;
+        padding: 0 1;
+        background: #1a1a1a;
+    }
+    #worker-info, #files-info {
+        height: auto;
+        max-height: 6;
+        padding: 0 1;
+        margin: 0;
+        background: #0f0f0f;
+    }
+    #worker-table, #files-table {
+        height: 1fr;
+        background: #0a0a0a;
+    }
+    DataTable > .datatable--header {
+        text-style: bold;
+        color: #00d4aa;
+        background: #1a1a1a;
+    }
+    DataTable > .datatable--cursor {
+        background: #003333;
+        color: #e0e0e0;
+    }
+    DataTable > .datatable--even-row {
+        background: #0a0a0a;
+    }
+    DataTable > .datatable--odd-row {
+        background: #0e0e0e;
+    }
+    #key-bar {
+        dock: bottom;
+        height: 1;
+        background: #000000;
+        padding: 0 1;
+    }
+    LogScreen {
+        background: #0a0a0a;
+    }
+    LogScreen RichLog {
+        height: 1fr;
+        background: #0a0a0a;
+    }
+    LogScreen #log-header {
+        height: 1;
+        background: #16213e;
+        color: #00d4aa;
+        text-style: bold;
+        padding: 0 1;
+    }
+    LogScreen #log-keybar {
+        dock: bottom;
+        height: 1;
+        background: #000000;
+        padding: 0 1;
+    }
+    ParamsScreen {
+        background: #0a0a0a;
+    }
+    ParamsScreen #params-header {
+        height: 1;
+        background: #16213e;
+        color: #00d4aa;
         text-style: bold;
         padding: 0 1;
     }
     ParamsScreen Static#params-content {
         height: 1fr;
         padding: 1 2;
+        background: #0a0a0a;
+    }
+    ParamsScreen #params-keybar {
+        dock: bottom;
+        height: 1;
+        background: #000000;
+        padding: 0 1;
     }
     ChecksumScreen {
         align: center middle;
@@ -678,13 +806,13 @@ class CdsswarmApp(App):
     ChecksumScreen #checksum-dialog {
         width: 64;
         height: auto;
-        border: thick $error;
-        background: $surface;
+        border: thick #ff4444;
+        background: #1a1a1a;
         padding: 1 2;
     }
     ChecksumScreen .checksum-title {
         text-style: bold;
-        color: $error;
+        color: #ff4444;
         margin-bottom: 1;
     }
     ChecksumScreen .checksum-info {
@@ -693,6 +821,10 @@ class CdsswarmApp(App):
     ChecksumScreen .checksum-buttons {
         margin-top: 1;
         height: auto;
+        width: 100%;
+    }
+    ChecksumScreen Button {
+        margin: 0 1;
     }
     """
 
@@ -700,7 +832,6 @@ class CdsswarmApp(App):
         Binding("q", "quit_app", "Quit", priority=True),
         Binding("t", "switch_tab", "Switch Tab"),
         Binding("tab", "switch_tab", "Switch Tab", show=False),
-        Binding("enter", "open_detail", "Logs"),
         Binding("a", "open_params", "Params"),
     ]
 
@@ -712,6 +843,8 @@ class CdsswarmApp(App):
         log_file=None,
     ) -> None:
         super().__init__()
+        self.register_theme(HTOP_THEME)
+        self.theme = "htop"
         self.num_workers = num_workers
         self.app_title = title
         self.downloader = downloader
@@ -734,23 +867,40 @@ class CdsswarmApp(App):
         self.qos_running = 0
         self.qos_limit = 0
 
+        # Tab state
+        self._active_tab = "workers"
+
         # Download results
         self.download_results = None
         self._download_done = threading.Event()
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        with TabbedContent("Workers", "Files", id="tabs"):
-            with TabPane("Workers", id="workers-pane"):
-                yield WorkerInfoPanel(id="worker-info")
-                yield DataTable(id="worker-table", cursor_type="row")
-            with TabPane("Files", id="files-pane"):
-                yield FilesInfoPanel(id="files-info")
-                yield DataTable(id="files-table", cursor_type="row")
-        yield ProgressFooter(id="progress-footer")
+        yield HeaderBar(id="header-bar")
+        yield MeterBar(id="meter-bar")
+        yield TabStrip(id="tab-strip")
+        # Workers view (visible by default)
+        yield WorkerInfoPanel(id="worker-info")
+        yield DataTable(id="worker-table", cursor_type="row")
+        # Files view (hidden initially)
+        yield FilesInfoPanel(id="files-info", classes="hidden")
+        yield DataTable(id="files-table", cursor_type="row", classes="hidden")
+        yield KeyBar(
+            " [bold white on #444444] q [/] Quit  "
+            "[bold white on #444444] t [/] Tab  "
+            "[bold white on #444444] Enter [/] Logs  "
+            "[bold white on #444444] a [/] Params",
+            id="key-bar",
+        )
 
     def on_mount(self) -> None:
+        self.theme = "htop"
         self.title = self.app_title
+
+        # Initial header bar
+        self._update_header_bar()
+
+        # Initial tab strip
+        self._update_tab_strip()
 
         # Setup worker table
         wt = self.query_one("#worker-table", DataTable)
@@ -795,13 +945,13 @@ class CdsswarmApp(App):
 
     def _tick_elapsed(self) -> None:
         """Update elapsed time for running workers."""
+        self._update_header_bar()
         wt = self.query_one("#worker-table", DataTable)
         for i, w in enumerate(self.worker_data):
             if w.start_time is not None and w.finish_time is None:
                 elapsed = format_eta(time.time() - w.start_time)
                 wt.update_cell(str(i), "Elapsed", elapsed)
-        # Also update progress footer
-        self._update_progress_footer()
+        self._update_meter_bar()
 
     # -- Message handlers --
 
@@ -942,11 +1092,11 @@ class CdsswarmApp(App):
         self.progress_completed = msg.completed
         self.progress_total = msg.total
         self.progress_skipped = msg.skipped
-        self._update_progress_footer()
+        self._update_meter_bar()
 
     def on_global_message(self, msg: GlobalMessage) -> None:
         self.status_message = msg.message
-        self._update_progress_footer()
+        self._update_meter_bar()
 
     def on_tasks_initialized(self, msg: TasksInitialized) -> None:
         self.files = []
@@ -982,7 +1132,7 @@ class CdsswarmApp(App):
         self.qos_queued = msg.queued
         self.qos_running = msg.running
         self.qos_limit = msg.limit
-        self._update_progress_footer()
+        self._update_meter_bar()
 
     def on_file_active(self, msg: FileActive) -> None:
         if msg.target in self.file_index:
@@ -1046,6 +1196,10 @@ class CdsswarmApp(App):
     def _on_files_cursor(self, event: DataTable.RowHighlighted) -> None:
         self._update_files_info()
 
+    @on(DataTable.RowSelected, "#worker-table")
+    def _on_worker_row_selected(self, event: DataTable.RowSelected) -> None:
+        self._open_worker_logs()
+
     # -- Actions --
 
     def action_quit_app(self) -> None:
@@ -1054,25 +1208,22 @@ class CdsswarmApp(App):
         self.exit()
 
     def action_switch_tab(self) -> None:
-        tabs = self.query_one("#tabs", TabbedContent)
-        if tabs.active == "workers-pane":
-            tabs.active = "files-pane"
+        if self._active_tab == "workers":
+            self._active_tab = "files"
+            self.query_one("#worker-info").add_class("hidden")
+            self.query_one("#worker-table").add_class("hidden")
+            self.query_one("#files-info").remove_class("hidden")
+            self.query_one("#files-table").remove_class("hidden")
         else:
-            tabs.active = "workers-pane"
-
-    def action_open_detail(self) -> None:
-        tabs = self.query_one("#tabs", TabbedContent)
-        if tabs.active != "workers-pane":
-            return
-        wt = self.query_one("#worker-table", DataTable)
-        row_idx = wt.cursor_row
-        if 0 <= row_idx < self.num_workers:
-            w = self.worker_data[row_idx]
-            self.push_screen(LogScreen(row_idx, w.filename or "\u2014", list(w.logs)))
+            self._active_tab = "workers"
+            self.query_one("#worker-info").remove_class("hidden")
+            self.query_one("#worker-table").remove_class("hidden")
+            self.query_one("#files-info").add_class("hidden")
+            self.query_one("#files-table").add_class("hidden")
+        self._update_tab_strip()
 
     def action_open_params(self) -> None:
-        tabs = self.query_one("#tabs", TabbedContent)
-        if tabs.active != "workers-pane":
+        if self._active_tab != "workers":
             return
         wt = self.query_one("#worker-table", DataTable)
         row_idx = wt.cursor_row
@@ -1081,6 +1232,16 @@ class CdsswarmApp(App):
             self.push_screen(ParamsScreen(row_idx, w.request_params, w.request_labels))
 
     # -- Internal helpers --
+
+    def _open_worker_logs(self) -> None:
+        """Open log screen for the currently selected worker."""
+        if self._active_tab != "workers":
+            return
+        wt = self.query_one("#worker-table", DataTable)
+        row_idx = wt.cursor_row
+        if 0 <= row_idx < self.num_workers:
+            w = self.worker_data[row_idx]
+            self.push_screen(LogScreen(row_idx, w.filename or "\u2014", list(w.logs)))
 
     def _update_worker_info(self) -> None:
         wt = self.query_one("#worker-table", DataTable)
@@ -1111,10 +1272,24 @@ class CdsswarmApp(App):
             else:
                 ft.update_cell(str(idx), "DL %", f"{pct}%")
 
-    def _update_progress_footer(self) -> None:
-        footer = self.query_one("#progress-footer", ProgressFooter)
-        footer.update(
-            footer.render_progress(
+    def _update_header_bar(self) -> None:
+        header = self.query_one("#header-bar", HeaderBar)
+        clock = time.strftime("%H:%M:%S")
+        header.update(
+            f" {self.app_title} \u2500 {self.num_workers} workers{'':>40}{clock}"
+        )
+
+    def _update_tab_strip(self) -> None:
+        strip = self.query_one("#tab-strip", TabStrip)
+        if self._active_tab == "workers":
+            strip.update(" [reverse] Workers [/]  Files")
+        else:
+            strip.update(" Workers  [reverse] Files [/]")
+
+    def _update_meter_bar(self) -> None:
+        meter = self.query_one("#meter-bar", MeterBar)
+        meter.update(
+            meter.render_progress(
                 self.progress_completed,
                 self.progress_total,
                 self.progress_skipped,
