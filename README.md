@@ -4,8 +4,8 @@ Concurrent [CDS API](https://cds.climate.copernicus.eu/) downloader with an inte
 
 Submit multiple CDS API requests and download them in parallel with a configurable number of workers. Monitor progress through an interactive terminal UI with an htop-style worker table, or run headless in script mode for CI/cron jobs.
 
-![Workers tab](img/tui_screenshot_workers.png)
-![Files tab](img/tui_screenshot.png)
+![Workers tab](https://raw.githubusercontent.com/bgiebl/cdsswarm/main/img/tui_screenshot_workers.png)
+![Files tab](https://raw.githubusercontent.com/bgiebl/cdsswarm/main/img/tui_screenshot.png)
 
 ## Installation
 

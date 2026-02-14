@@ -9,7 +9,7 @@ description = "Concurrent CDS API downloader with TUI and script mode"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
-authors = [{ name = "Benedikt Giebl" }]
+authors = [{ name = "Benedikt Giebl", email = "b.giebl@protonmail.com" }]
 keywords = ["cds", "copernicus", "era5", "climate", "download", "concurrent"]
 classifiers = [
     "Development Status :: 4 - Beta",
