@@ -143,9 +143,10 @@ def _run_script(
     reuse_jobs: bool = True,
     max_retries: int = 3,
     log_file=None,
+    ignore_warnings: bool = False,
 ):
     """Run downloads with plain text output."""
-    adapter = PlainTextAdapter()
+    adapter = PlainTextAdapter(interactive=not ignore_warnings)
     if log_file:
         adapter = LoggingAdapter(adapter, log_file)
     downloader = SwarmDownloader(
@@ -218,6 +219,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Show what would be downloaded without actually downloading",
     )
     parser.add_argument(
+        "--ignore-warnings",
+        action="store_true",
+        default=None,
+        help="Auto-continue on warnings (e.g. checksum mismatch) without prompting",
+    )
+    parser.add_argument(
         "--log",
         default=None,
         metavar="FILE",
@@ -256,6 +263,7 @@ def main(argv: list[str] | None = None):
         "mode": args.mode,
         "reuse": args.reuse,
         "max_retries": args.max_retries,
+        "ignore_warnings": args.ignore_warnings if args.ignore_warnings else None,
         "output_dir": args.output_dir,
         "log": args.log,
         "summary": args.summary,
@@ -292,6 +300,7 @@ def main(argv: list[str] | None = None):
     workers = settings["workers"]
     reuse = settings["reuse"]
     max_retries = settings["max_retries"]
+    ignore_warnings = settings["ignore_warnings"]
     log_path = settings["log"]
     summary_path = settings["summary"]
 
@@ -315,6 +324,7 @@ def main(argv: list[str] | None = None):
                 reuse,
                 max_retries,
                 log_file=log_file,
+                ignore_warnings=ignore_warnings,
             )
         wall_end = time.time()
     finally:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import sys
 import threading
 from abc import ABC, abstractmethod
 from typing import IO, TYPE_CHECKING
@@ -12,6 +13,44 @@ from ._cds_utils import parse_cds_status
 if TYPE_CHECKING:
     from .core import Task
     from .textual_app import CdsswarmApp
+
+# 16 distinct ANSI styles: 6 colors × normal/bold + 4 bright colors.
+# Covers up to 16 workers with unique visual identity; beyond that, cycles.
+_WORKER_STYLES = [
+    "34",  # blue
+    "32",  # green
+    "33",  # yellow
+    "36",  # cyan
+    "35",  # magenta
+    "31",  # red
+    "1;34",  # bold blue
+    "1;32",  # bold green
+    "1;33",  # bold yellow
+    "1;36",  # bold cyan
+    "1;35",  # bold magenta
+    "1;31",  # bold red
+    "94",  # bright blue
+    "92",  # bright green
+    "93",  # bright yellow
+    "96",  # bright cyan
+]
+
+_CDS_STATUS_DESCRIPTIONS = {
+    "accepted": "request queued on CDS server",
+    "running": "server is processing request",
+    "successful": "server finished, starting download",
+    "failed": "request failed on server",
+    "cancelled": "request cancelled",
+}
+
+# ANSI codes for CDS status colors (orange uses 256-color mode)
+_CDS_STATUS_COLORS = {
+    "accepted": "33",  # yellow
+    "running": "38;5;208",  # orange
+    "successful": "32",  # green
+    "failed": "31",  # red
+    "cancelled": "35",  # purple
+}
 
 
 class OutputAdapter(ABC):
@@ -76,22 +115,99 @@ class OutputAdapter(ABC):
 class PlainTextAdapter(OutputAdapter):
     """Simple text output for script/non-interactive mode."""
 
-    def __init__(self, write_fn=None):
+    _PROGRESS_MILESTONES = frozenset({25, 50, 75, 100})
+
+    def __init__(
+        self,
+        write_fn=None,
+        use_color: bool | None = None,
+        interactive: bool | None = None,
+    ):
         self._write = write_fn or print
         self._done = 0
         self._total = 0
+        self._last_status: dict[int, str] = {}
+        self._last_qos: tuple[int, int, int] | None = None
+        self._last_dl_milestone: dict[int, int] = {}
+        self._worker_labels: dict[int, str] = {}
+        if use_color is None:
+            self._color = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
+        else:
+            self._color = use_color
+        if interactive is None:
+            self._interactive = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+        else:
+            self._interactive = interactive
+
+    def _worker_tag(self, worker_id: int) -> str:
+        tag = f"[Worker {worker_id}]"
+        if self._color:
+            style = _WORKER_STYLES[worker_id % len(_WORKER_STYLES)]
+            tag = f"\033[{style}m{tag}\033[0m"
+        return tag
 
     def on_task_started(self, worker_id, task):
-        pass
+        self._last_status.pop(worker_id, None)
+        self._last_dl_milestone.pop(worker_id, None)
+        self._worker_labels[worker_id] = task.label
+        self._write(f"  {self._worker_tag(worker_id)} starting {task.label}")
+
+    def _status_text(self, cds_status: str) -> str:
+        """Format a CDS status name with color and description."""
+        desc = _CDS_STATUS_DESCRIPTIONS.get(cds_status, "")
+        if self._color:
+            color = _CDS_STATUS_COLORS.get(cds_status, "0")
+            name = f"\033[{color}m{cds_status}\033[0m"
+        else:
+            name = cds_status
+        if desc:
+            return f"{name} — {desc}"
+        return name
 
     def on_task_message(self, worker_id, message):
         cds_status = parse_cds_status(message)
         if cds_status:
-            self._write(f"  [worker {worker_id}] status: {cds_status}")
+            if self._last_status.get(worker_id) == cds_status:
+                return
+            self._last_status[worker_id] = cds_status
+            label = self._worker_labels.get(worker_id, "")
+            status = self._status_text(cds_status)
+            if label:
+                self._write(f"  {self._worker_tag(worker_id)} {label}: {status}")
+            else:
+                self._write(f"  {self._worker_tag(worker_id)} {status}")
+
+    def on_task_progress(self, worker_id, downloaded_bytes, total_bytes):
+        if not total_bytes:
+            return
+        pct = int(downloaded_bytes * 100 / total_bytes)
+        milestone = max(
+            (m for m in self._PROGRESS_MILESTONES if pct >= m), default=None
+        )
+        if milestone is None:
+            return
+        if self._last_dl_milestone.get(worker_id) == milestone:
+            return
+        self._last_dl_milestone[worker_id] = milestone
+        done_mb = downloaded_bytes / (1024 * 1024)
+        total_mb = total_bytes / (1024 * 1024)
+        label = self._worker_labels.get(worker_id, "")
+        prefix = f"{label}: " if label else ""
+        self._write(
+            f"  {self._worker_tag(worker_id)} {prefix}downloading "
+            f"{done_mb:.0f}/{total_mb:.0f} MB ({milestone}%)"
+        )
+
+    def _green(self, text: str) -> str:
+        if self._color:
+            return f"\033[32m{text}\033[0m"
+        return text
 
     def on_task_completed(self, worker_id, task, success, error=""):
         if success:
-            self._write(f"  [{self._done}/{self._total}] {task.label} done")
+            counter = self._green(f"[{self._done}/{self._total}]")
+            done = self._green("done")
+            self._write(f"  {counter} {task.label} {done}")
         else:
             self._write(f"  [{self._done}/{self._total}] {task.label} FAILED: {error}")
 
@@ -100,19 +216,40 @@ class PlainTextAdapter(OutputAdapter):
         self._total = total
 
     def on_global_message(self, message):
-        self._write(message)
+        if self._color and "All downloads completed" in message:
+            self._write(self._green(message))
+        else:
+            self._write(message)
 
     def on_task_checksum_result(self, worker_id, passed, expected):
         if not passed:
-            self._write(
-                f"  [worker {worker_id}] WARNING: checksum mismatch "
-                f"(expected {expected})"
-            )
-        return "continue"  # Non-interactive: always continue
+            label = self._worker_labels.get(worker_id, "")
+            prefix = f"{label}: " if label else ""
+            warning = f"WARNING: checksum mismatch (expected {expected})"
+            if self._color:
+                warning = f"\033[1;38;5;208m{warning}\033[0m"
+            self._write(f"  {self._worker_tag(worker_id)} {prefix}{warning}")
+
+            if self._interactive:
+                while True:
+                    try:
+                        choice = input("  [c]ontinue / [r]etry? ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        return "continue"
+                    if choice in ("c", "continue"):
+                        return "continue"
+                    if choice in ("r", "retry"):
+                        return "retry"
+            return "continue"
+        return "continue"
 
     def on_qos_update(self, queued, running, limit):
+        new_qos = (queued, running, limit)
+        if new_qos == self._last_qos:
+            return
+        self._last_qos = new_qos
         if queued > 0 or running > 0:
-            self._write(f"  CDS Server: {queued} queued | {running}/{limit} running")
+            self._write(f"  [CDS server] {queued} queued | {running}/{limit} running")
 
 
 class TextualAdapter(OutputAdapter):

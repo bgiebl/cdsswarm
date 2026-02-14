@@ -52,6 +52,7 @@ class Result:
     start_time: float = 0.0
     end_time: float = 0.0
     file_size: int = 0
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -94,6 +95,7 @@ class SwarmDownloader:
         self._state: _WorkerState | None = None
         self._pool: ThreadPoolExecutor | None = None
         self._task_timing: dict[str, tuple[float, float, int]] = {}
+        self._task_warnings: dict[str, list[str]] = {}
 
     def cancel(self):
         """Cancel all in-flight CDS requests and shut down the pool.
@@ -194,6 +196,7 @@ class SwarmDownloader:
                 wid = state.task_worker_map.get(task.target, 0)
                 self._adapter.on_progress_update(completed, len(pending), skipped)
                 timing = self._task_timing.get(task.target, (0.0, 0.0, 0))
+                warns = self._task_warnings.get(task.target, [])
                 try:
                     future.result()
                     self._adapter.on_task_completed(wid, task, True)
@@ -204,6 +207,7 @@ class SwarmDownloader:
                             start_time=timing[0],
                             end_time=timing[1],
                             file_size=timing[2],
+                            warnings=warns,
                         )
                     )
                 except Exception as e:
@@ -216,13 +220,17 @@ class SwarmDownloader:
                             start_time=timing[0],
                             end_time=timing[1],
                             file_size=timing[2],
+                            warnings=warns,
                         )
                     )
         except KeyboardInterrupt:
             self._cancel_event.set()
-            self._adapter.on_global_message("Interrupted \u2014 cancelling...")
+            self._adapter.on_global_message("Interrupted — cancelling CDS requests...")
             pool.shutdown(wait=False, cancel_futures=True)
-            self._cancel_active(state)
+            try:
+                self._cancel_active(state)
+            except KeyboardInterrupt:
+                self._adapter.on_global_message("Force quit — skipping cancellation")
             return None
         else:
             pool.shutdown(wait=True)
@@ -349,6 +357,12 @@ class SwarmDownloader:
                                     )
                                     if decision == "retry":
                                         should_retry = True
+                                    else:
+                                        self._task_warnings.setdefault(
+                                            task.target, []
+                                        ).append(
+                                            f"Checksum mismatch (expected {checksum_md5})"
+                                        )
                                 else:
                                     self._adapter.on_task_message(wid, "Checksum OK")
                     except Exception:

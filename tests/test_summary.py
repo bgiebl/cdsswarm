@@ -175,6 +175,7 @@ class TestExportSummary:
                 "target",
                 "status",
                 "error",
+                "warnings",
                 "duration",
                 "file_size",
                 "start_time",

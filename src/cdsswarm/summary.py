@@ -66,6 +66,7 @@ def build_summary(
                 "target": r.task.target,
                 "status": "ok" if r.success else "FAILED",
                 "error": r.error,
+                "warnings": list(r.warnings),
                 "duration": round(duration, 2),
                 "file_size": r.file_size,
                 "start_time": r.start_time,
@@ -114,7 +115,7 @@ def print_summary(
     totals = summary["totals"]
     tasks = summary["tasks"]
 
-    sep = "=" * 60
+    sep = "=" * 80
     write(sep)
     write("Summary")
     write(sep)
@@ -159,6 +160,20 @@ def print_summary(
                 label = os.path.basename(label)
             write(f"    {label}: {t['error']}")
 
+    # Warnings section
+    warned = [t for t in tasks if t.get("warnings")]
+    if warned:
+        write("")
+        write("  Warnings:")
+        for t in warned:
+            label = t["target"]
+            if "/" in label or "\\" in label:
+                import os
+
+                label = os.path.basename(label)
+            for w in t["warnings"]:
+                write(f"    {label}: {w}")
+
     write(sep)
 
 
@@ -194,6 +209,7 @@ def export_summary(
                     "target",
                     "status",
                     "error",
+                    "warnings",
                     "duration",
                     "file_size",
                     "start_time",
@@ -206,6 +222,7 @@ def export_summary(
                         t["target"],
                         t["status"],
                         t["error"],
+                        "; ".join(t.get("warnings", [])),
                         t["duration"],
                         t["file_size"],
                         t["start_time"],

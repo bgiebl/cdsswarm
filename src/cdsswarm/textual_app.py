@@ -830,6 +830,7 @@ class CdsswarmApp(App):
 
     BINDINGS = [
         Binding("q", "quit_app", "Quit", priority=True),
+        Binding("ctrl+c", "ctrl_c", "Force Quit", show=False, priority=True),
         Binding("t", "switch_tab", "Switch Tab"),
         Binding("tab", "switch_tab", "Switch Tab", show=False),
         Binding("a", "open_params", "Params"),
@@ -869,6 +870,10 @@ class CdsswarmApp(App):
 
         # Tab state
         self._active_tab = "workers"
+
+        # Cancel / quit state
+        self._cancel_event = threading.Event()
+        self._ctrl_c_count = 0
 
         # Download results
         self.download_results = None
@@ -1203,9 +1208,29 @@ class CdsswarmApp(App):
     # -- Actions --
 
     def action_quit_app(self) -> None:
+        if self.downloader is not None and not self._cancel_event.is_set():
+            self._cancel_event.set()
+            self.status_message = "Cancelling CDS requests..."
+            self._update_meter_bar()
+            self._cancel_and_exit()
+        else:
+            self.exit()
+
+    def action_ctrl_c(self) -> None:
+        self._ctrl_c_count += 1
+        if self._ctrl_c_count >= 2:
+            # Rage quit — exit immediately
+            self.exit()
+        else:
+            # First Ctrl+C — graceful cancel
+            self.action_quit_app()
+
+    @work(thread=True)
+    def _cancel_and_exit(self) -> None:
+        """Cancel active CDS requests in a background thread, then exit."""
         if self.downloader is not None:
             self.downloader.cancel()
-        self.exit()
+        self.call_from_thread(self.exit)
 
     def action_switch_tab(self) -> None:
         if self._active_tab == "workers":
