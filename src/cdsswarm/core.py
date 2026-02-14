@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import logging
 import os
 import threading
 import time
@@ -10,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 import cdsapi
+import requests as http_requests
 
 from ._cds_metadata import MetadataPoller, fetch_job_results, verify_checksum
 from ._cds_utils import (
@@ -21,6 +23,8 @@ from ._cds_utils import (
     uninstall_progress_router,
 )
 from .adapters import OutputAdapter
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -367,8 +371,10 @@ class SwarmDownloader:
                                             )
                                 else:
                                     self._adapter.on_task_message(wid, "Checksum OK")
-                    except Exception:
-                        pass  # Graceful degradation
+                    except http_requests.RequestException as exc:
+                        log.debug("Checksum fetch failed for %s: %s", rid, exc)
+                    except (OSError, ValueError) as exc:
+                        log.warning("Checksum verification error: %s", exc)
 
                 with state.lock:
                     state.active_requests.pop(task.target, None)

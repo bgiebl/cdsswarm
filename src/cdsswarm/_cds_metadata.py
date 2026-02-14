@@ -314,8 +314,13 @@ class MetadataPoller:
                     include_qos=not qos_fetched,
                     include_request=True,
                 )
-            except Exception:
+            except http_requests.RequestException:
                 log.debug("Failed to poll metadata for %s", rid, exc_info=True)
+                continue
+            except Exception:
+                log.warning(
+                    "Unexpected error polling metadata for %s", rid, exc_info=True
+                )
                 continue
 
             self._dispatch_updates(wid, rid, meta)

@@ -5,6 +5,7 @@ import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from cdsswarm.adapters import PlainTextAdapter
 from cdsswarm.core import Result, SwarmDownloader, Task
@@ -511,3 +512,39 @@ class TestSwarmDownloader:
         ]
         assert len(retry_messages) == 1
         assert "1/3" in str(retry_messages[0])
+
+    @patch("cdsswarm.core.fetch_job_results")
+    @patch("cdsswarm.core.cdsapi")
+    def test_checksum_network_error_degrades_gracefully(
+        self, mock_cdsapi, mock_fetch, tmp_dir
+    ):
+        """Download succeeds when checksum fetch fails with a network error."""
+
+        def capture_client(**kwargs):
+            client = MagicMock()
+            # Expose inner client so the checksum code path is entered
+            client.client = MagicMock()
+            client.client._get_headers = MagicMock(return_value={})
+            info_cb = kwargs.get("info_callback")
+
+            def fake_retrieve(dataset, request, target):
+                if info_cb:
+                    info_cb("Request ID is abc-12345-def")
+                with open(target, "w") as f:
+                    f.write("data")
+
+            client.retrieve.side_effect = fake_retrieve
+            return client
+
+        mock_cdsapi.Client.side_effect = capture_client
+        mock_fetch.side_effect = requests.ConnectionError("connection refused")
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1)
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 1
+        assert results[0].success
+        mock_fetch.assert_called_once()

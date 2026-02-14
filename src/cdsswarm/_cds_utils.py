@@ -8,6 +8,8 @@ import threading
 
 import requests as http_requests
 
+log = logging.getLogger(__name__)
+
 # CDS API status messages:
 #   Old cdsapi:           "Request is <state>"
 #   New ecmwf-datastores: "status has been updated to <state>"
@@ -86,7 +88,8 @@ def find_reusable_jobs(client, tasks, limit=200) -> dict[str, str]:
             break
         try:
             _scan_jobs(inner, status, limit, needed_datasets, needed, reuse_map)
-        except Exception:
+        except Exception as exc:
+            log.debug("Job scan for status=%s failed: %s", status, exc)
             continue
         remaining = sum(len(v) for v in needed.values())
 
@@ -106,7 +109,8 @@ def _scan_jobs(inner, status, limit, needed_datasets, needed, reuse_map):
             sortby="-created",
             limit=limit,
         )
-    except Exception:
+    except Exception as exc:
+        log.debug("get_jobs(status=%s) failed: %s", status, exc)
         return
 
     # Jobs are plain dicts in the paginated JSON response
@@ -121,7 +125,8 @@ def _scan_jobs(inner, status, limit, needed_datasets, needed, reuse_map):
         try:
             remote = inner.get_remote(job_id)
             norm_job = normalize_request(dict(remote.request))
-        except Exception:
+        except Exception as exc:
+            log.debug("get_remote(%s) failed: %s", job_id, exc)
             continue
         key = (process_id, _dict_key(norm_job))
         if key in needed:
