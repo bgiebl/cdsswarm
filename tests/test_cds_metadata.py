@@ -2,11 +2,13 @@
 
 import hashlib
 import os
+import sys
 import tempfile
 import threading
 import time
 from unittest.mock import MagicMock, patch
 
+import requests as http_requests
 
 from cdsswarm._cds_metadata import (
     JobMetadata,
@@ -478,3 +480,98 @@ class TestMetadataPoller:
         poller._thread.join(timeout=2)
         # No client registered, so no callbacks should have fired
         adapter.on_task_server_progress.assert_not_called()
+
+    def test_poll_once_no_active_requests(self):
+        """Empty active_requests → early return, no fetch calls."""
+        adapter = MagicMock()
+        state = MagicMock()
+        state.lock = threading.Lock()
+        state.active_requests = {}
+        state.task_worker_map = {}
+        cancel = threading.Event()
+        poller = MetadataPoller(adapter, state, cancel)
+        inner = MagicMock()
+
+        with patch("cdsswarm._cds_metadata.fetch_job_metadata") as mock_fetch:
+            poller._poll_once(inner)
+            mock_fetch.assert_not_called()
+
+    def test_poll_once_missing_worker_mapping(self):
+        """Target in active_requests but not in task_worker_map → skipped."""
+        adapter = MagicMock()
+        state = MagicMock()
+        state.lock = threading.Lock()
+        state.active_requests = {"target.grib": ("rid-1", MagicMock())}
+        state.task_worker_map = {}  # No mapping for target.grib
+        cancel = threading.Event()
+        poller = MetadataPoller(adapter, state, cancel)
+        inner = MagicMock()
+
+        with patch("cdsswarm._cds_metadata.fetch_job_metadata") as mock_fetch:
+            poller._poll_once(inner)
+            mock_fetch.assert_not_called()
+
+    def test_poll_once_request_exception(self):
+        """fetch_job_metadata raises RequestException → no crash, continues."""
+        adapter = MagicMock()
+        state = MagicMock()
+        state.lock = threading.Lock()
+        state.active_requests = {"target.grib": ("rid-1", MagicMock())}
+        state.task_worker_map = {"target.grib": 0}
+        cancel = threading.Event()
+        poller = MetadataPoller(adapter, state, cancel)
+        inner = MagicMock()
+
+        with patch(
+            "cdsswarm._cds_metadata.fetch_job_metadata",
+            side_effect=http_requests.RequestException("connection refused"),
+        ):
+            poller._poll_once(inner)  # Should not raise
+
+        adapter.on_task_server_progress.assert_not_called()
+
+
+class TestFetchImportFallback:
+    def test_fetch_job_metadata_no_ecmwf(self):
+        """When ecmwf.datastores is not importable, api_version defaults to v1."""
+        with patch.dict(
+            sys.modules,
+            {
+                "ecmwf": None,
+                "ecmwf.datastores": None,
+                "ecmwf.datastores.config": None,
+            },
+        ):
+            inner = MagicMock()
+            inner.url = "https://cds.example.com/api"
+            inner.verify = True
+            inner._get_headers.return_value = {}
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"jobID": "test-id"}
+            with patch("cdsswarm._cds_metadata.http_requests") as mock_req:
+                mock_req.get.return_value = mock_resp
+                meta, qos = fetch_job_metadata(inner, "test-id")
+            url = mock_req.get.call_args[0][0]
+            assert "/v1/" in url
+
+    def test_fetch_job_results_no_ecmwf(self):
+        """When ecmwf.datastores is not importable, api_version defaults to v1."""
+        with patch.dict(
+            sys.modules,
+            {
+                "ecmwf": None,
+                "ecmwf.datastores": None,
+                "ecmwf.datastores.config": None,
+            },
+        ):
+            inner = MagicMock()
+            inner.url = "https://cds.example.com/api"
+            inner.verify = True
+            inner._get_headers.return_value = {}
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {}
+            with patch("cdsswarm._cds_metadata.http_requests") as mock_req:
+                mock_req.get.return_value = mock_resp
+                size, checksum = fetch_job_results(inner, "test-id")
+            url = mock_req.get.call_args[0][0]
+            assert "/v1/" in url

@@ -305,6 +305,40 @@ class TestFindReusableJobs:
         assert reuse_map == {}
 
 
+class TestFindReusableJobsScanException:
+    def test_scan_exception_continues_to_next_status(self):
+        """Exception scanning one status doesn't prevent scanning the next."""
+
+        inner = MagicMock()
+        inner.get_remote = MagicMock()
+
+        normalize_request({"year": "2024"})
+        task = MagicMock(dataset="ds", request={"year": "2024"}, target="out.grib")
+
+        # get_jobs raises for "successful", returns match for "running"
+        call_count = [0]
+
+        def get_jobs_side_effect(status, sortby, limit):
+            call_count[0] += 1
+            if status == WorkerStatus.SUCCESSFUL:
+                raise RuntimeError("API error for successful")
+            resp = MagicMock()
+            resp._json_dict = {"jobs": [{"processID": "ds", "jobID": "job-run"}]}
+            return resp
+
+        inner.get_jobs.side_effect = get_jobs_side_effect
+
+        remote = MagicMock()
+        remote.request = {"year": "2024"}
+        inner.get_remote.return_value = remote
+
+        client = MagicMock()
+        client.client = inner
+
+        result = find_reusable_jobs(client, [task])
+        assert result == {"out.grib": "job-run"}
+
+
 class TestCancelImportError:
     def test_no_ecmwf_datastores_falls_back_to_old_style(self):
         """When ecmwf.datastores is not importable, falls through to old-style DELETE."""

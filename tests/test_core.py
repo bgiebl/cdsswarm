@@ -742,3 +742,100 @@ class TestSwarmDownloader:
         adapter.on_task_checksum_result.assert_called_once_with(
             0, True, "good-checksum"
         )
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_info_cb_format_error_fallback(self, mock_cdsapi, tmp_dir):
+        """info_callback falls back to str(msg) on format errors."""
+        captured_info_cb = []
+
+        def capture_client(**kwargs):
+            client = MagicMock()
+            if "info_callback" in kwargs:
+                captured_info_cb.append(kwargs["info_callback"])
+
+            def fake_retrieve(dataset, request, target):
+                with open(target, "w") as f:
+                    f.write("data")
+
+            client.retrieve.side_effect = fake_retrieve
+            return client
+
+        mock_cdsapi.Client.side_effect = capture_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1)
+        downloader.run()
+
+        assert captured_info_cb, "info_callback was not passed to Client"
+        info_cb = captured_info_cb[0]
+
+        # Call with args that will cause % formatting to fail
+        info_cb("value %d", "not-a-number")
+        # Should NOT raise — falls back to str(msg)
+
+    @patch("cdsswarm.core.verify_checksum")
+    @patch("cdsswarm.core.fetch_job_results")
+    @patch("cdsswarm.core.cdsapi")
+    def test_checksum_verify_os_error(
+        self, mock_cdsapi, mock_fetch, mock_verify, tmp_dir
+    ):
+        """Download succeeds when verify_checksum raises OSError."""
+
+        def capture_client(**kwargs):
+            client = MagicMock()
+            client.client = MagicMock()
+            client.client._get_headers = MagicMock(return_value={})
+            info_cb = kwargs.get("info_callback")
+
+            def fake_retrieve(dataset, request, target):
+                if info_cb:
+                    info_cb("Request ID is abc-12345-def")
+                with open(target, "w") as f:
+                    f.write("data")
+
+            client.retrieve.side_effect = fake_retrieve
+            return client
+
+        mock_cdsapi.Client.side_effect = capture_client
+        mock_fetch.return_value = (1024, "some-checksum")
+        mock_verify.side_effect = OSError("file not found")
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1)
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 1
+        assert results[0].success
+
+    @patch("cdsswarm.core.find_reusable_jobs")
+    @patch("cdsswarm.core.cdsapi")
+    def test_reuse_old_client_falls_back_to_retrieve(
+        self, mock_cdsapi, mock_find, tmp_dir
+    ):
+        """When client.client is None, reuse falls back to retrieve()."""
+        tasks = _make_tasks(tmp_dir, count=1)
+        target = tasks[0].target
+
+        mock_find.return_value = {target: "existing-job-id"}
+
+        mock_client = MagicMock()
+        mock_client.client = None  # Old-style client, no inner
+
+        def fake_retrieve(dataset, request, target):
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, reuse_jobs=True)
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 1
+        assert results[0].success
+        mock_client.retrieve.assert_called_once()

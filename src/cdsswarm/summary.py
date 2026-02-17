@@ -35,7 +35,7 @@ def _format_bytes(size: int) -> str:
                 return f"{size} {unit}"
             return f"{size:.1f} {unit}"
         size = size / 1024
-    return f"{size:.1f} TB"
+    return f"{size:.1f} TB"  # pragma: no cover
 
 
 def build_summary(

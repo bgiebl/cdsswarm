@@ -2,4 +2,4 @@
 
 from .cli import main
 
-main()
+main()  # pragma: no cover

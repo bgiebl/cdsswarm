@@ -4,8 +4,14 @@ import io
 import threading
 from unittest.mock import MagicMock, patch
 
-from cdsswarm.adapters import LoggingAdapter, OutputAdapter, PlainTextAdapter
+from cdsswarm.adapters import (
+    LoggingAdapter,
+    OutputAdapter,
+    PlainTextAdapter,
+    TextualAdapter,
+)
 from cdsswarm.core import Task
+from cdsswarm.status import WorkerStatus
 
 
 class _NoOpAdapter(OutputAdapter):
@@ -516,3 +522,265 @@ class TestLoggingAdapter:
         assert "qos:" in log
         assert "queued=100" in log
         inner.on_qos_update.assert_called_once_with(100, 20, 20)
+
+
+class TestTextualAdapter:
+    """Tests for TextualAdapter — verifies correct Message posting via mock app."""
+
+    def _make_adapter(self):
+        mock_app = MagicMock()
+        adapter = TextualAdapter(mock_app)
+        return adapter, mock_app
+
+    def _posted_messages(self, mock_app):
+        """Extract the Message objects posted via call_from_thread."""
+        return [
+            c[0][1]  # call_from_thread(post_message, msg) → msg is second arg
+            for c in mock_app.call_from_thread.call_args_list
+        ]
+
+    def test_on_tasks_initialized(self):
+        from cdsswarm.textual_app import TasksInitialized
+
+        adapter, app = self._make_adapter()
+        tasks = [Task("ds", {}, "file.grib")]
+        adapter.on_tasks_initialized(tasks, {"skipped.grib"})
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], TasksInitialized)
+        assert msgs[0].tasks == tasks
+        assert msgs[0].skipped_targets == {"skipped.grib"}
+
+    def test_on_task_started(self):
+        from cdsswarm.textual_app import FileActive, WorkerStarted
+
+        adapter, app = self._make_adapter()
+        task = Task("my-dataset", {"year": "2024"}, "/path/to/file.grib")
+        adapter.on_task_started(0, task)
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 2
+        assert isinstance(msgs[0], WorkerStarted)
+        assert msgs[0].worker_id == 0
+        assert msgs[0].filename == "file.grib"
+        assert msgs[0].dataset == "my-dataset"
+        assert msgs[0].request == {"year": "2024"}
+        assert msgs[0].target == "/path/to/file.grib"
+        assert isinstance(msgs[1], FileActive)
+        assert msgs[1].target == "/path/to/file.grib"
+        assert msgs[1].worker_id == 0
+
+    def test_on_task_message_with_status(self):
+        from cdsswarm.textual_app import WorkerCdsStatus, WorkerMessage
+
+        adapter, app = self._make_adapter()
+        adapter.on_task_message(1, "Request is queued")
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 2
+        assert isinstance(msgs[0], WorkerCdsStatus)
+        assert msgs[0].worker_id == 1
+        assert msgs[0].cds_status == WorkerStatus.ACCEPTED
+        assert isinstance(msgs[1], WorkerMessage)
+        assert msgs[1].message == "Request is queued"
+
+    def test_on_task_message_no_status(self):
+        from cdsswarm.textual_app import WorkerMessage
+
+        adapter, app = self._make_adapter()
+        adapter.on_task_message(2, "some plain message")
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], WorkerMessage)
+        assert msgs[0].message == "some plain message"
+
+    def test_on_task_completed_success(self):
+        from cdsswarm.textual_app import (
+            FileCompleted,
+            WorkerCdsStatus,
+            WorkerFinished,
+            WorkerMessage,
+        )
+
+        adapter, app = self._make_adapter()
+        task = Task("ds", {}, "file.grib")
+        adapter.on_task_completed(0, task, success=True)
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 4
+        assert isinstance(msgs[0], WorkerCdsStatus)
+        assert msgs[0].cds_status == WorkerStatus.SUCCESSFUL
+        assert isinstance(msgs[1], WorkerMessage)
+        assert "Completed" in msgs[1].message
+        assert isinstance(msgs[2], WorkerFinished)
+        assert isinstance(msgs[3], FileCompleted)
+        assert msgs[3].success is True
+
+    def test_on_task_completed_failure(self):
+        from cdsswarm.textual_app import (
+            FileCompleted,
+            WorkerCdsStatus,
+            WorkerFinished,
+            WorkerMessage,
+        )
+
+        adapter, app = self._make_adapter()
+        task = Task("ds", {}, "file.grib")
+        adapter.on_task_completed(0, task, success=False, error="timeout")
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 4
+        assert isinstance(msgs[0], WorkerCdsStatus)
+        assert msgs[0].cds_status == WorkerStatus.FAILED
+        assert isinstance(msgs[1], WorkerMessage)
+        assert "timeout" in msgs[1].message
+        assert isinstance(msgs[2], WorkerFinished)
+        assert isinstance(msgs[3], FileCompleted)
+        assert msgs[3].success is False
+        assert msgs[3].error == "timeout"
+
+    def test_on_progress_update(self):
+        from cdsswarm.textual_app import ProgressUpdate
+
+        adapter, app = self._make_adapter()
+        adapter.on_progress_update(5, 10, 2)
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], ProgressUpdate)
+        assert msgs[0].completed == 5
+        assert msgs[0].total == 10
+        assert msgs[0].skipped == 2
+
+    def test_on_task_request_id(self):
+        from cdsswarm.textual_app import WorkerRequestId
+
+        adapter, app = self._make_adapter()
+        adapter.on_task_request_id(3, "abc-123")
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], WorkerRequestId)
+        assert msgs[0].request_id == "abc-123"
+
+    def test_on_task_progress(self):
+        from cdsswarm.textual_app import WorkerProgress
+
+        adapter, app = self._make_adapter()
+        adapter.on_task_progress(0, 1024, 4096)
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], WorkerProgress)
+        assert msgs[0].downloaded == 1024
+        assert msgs[0].total == 4096
+
+    def test_on_task_cancelled(self):
+        from cdsswarm.textual_app import WorkerCancelled
+
+        adapter, app = self._make_adapter()
+        adapter.on_task_cancelled(1)
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], WorkerCancelled)
+        assert msgs[0].worker_id == 1
+
+    def test_on_task_server_progress(self):
+        from cdsswarm.textual_app import WorkerServerProgress
+
+        adapter, app = self._make_adapter()
+        adapter.on_task_server_progress(0, 75)
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], WorkerServerProgress)
+        assert msgs[0].progress == 75
+
+    def test_on_task_file_size(self):
+        from cdsswarm.textual_app import WorkerFileSize
+
+        adapter, app = self._make_adapter()
+        adapter.on_task_file_size(0, 95418)
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], WorkerFileSize)
+        assert msgs[0].file_size == 95418
+
+    def test_on_task_checksum_pass(self):
+        from cdsswarm.textual_app import WorkerChecksum
+
+        adapter, app = self._make_adapter()
+        result = adapter.on_task_checksum_result(0, True, "abc123")
+        assert result == "continue"
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], WorkerChecksum)
+        assert msgs[0].passed is True
+
+    def test_on_task_checksum_fail(self):
+        from cdsswarm.textual_app import ShowChecksumDialog
+
+        adapter, app = self._make_adapter()
+
+        # When ShowChecksumDialog is posted, simulate the UI setting the result
+        def fake_call_from_thread(fn, msg):
+            if isinstance(msg, ShowChecksumDialog):
+                msg.result_holder.append("retry")
+                msg.result_event.set()
+
+        app.call_from_thread.side_effect = fake_call_from_thread
+
+        result = adapter.on_task_checksum_result(0, False, "expected-hash")
+        assert result == "retry"
+        # Verify both WorkerChecksum and ShowChecksumDialog were posted
+        calls = app.call_from_thread.call_args_list
+        msg_types = [type(c[0][1]).__name__ for c in calls]
+        assert "WorkerChecksum" in msg_types
+        assert "ShowChecksumDialog" in msg_types
+
+    def test_on_task_server_timestamps(self):
+        from cdsswarm.textual_app import WorkerServerTimestamps
+
+        adapter, app = self._make_adapter()
+        adapter.on_task_server_timestamps(0, "2024-01-01", "2024-01-02", "2024-01-03")
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], WorkerServerTimestamps)
+        assert msgs[0].created == "2024-01-01"
+        assert msgs[0].started == "2024-01-02"
+        assert msgs[0].finished == "2024-01-03"
+
+    def test_on_task_dataset_title(self):
+        from cdsswarm.textual_app import WorkerDatasetTitle
+
+        adapter, app = self._make_adapter()
+        adapter.on_task_dataset_title(0, "ERA5 hourly")
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], WorkerDatasetTitle)
+        assert msgs[0].title == "ERA5 hourly"
+
+    def test_on_task_request_labels(self):
+        from cdsswarm.textual_app import WorkerRequestLabels
+
+        adapter, app = self._make_adapter()
+        labels = {"Variable": "Temperature", "Year": "2024"}
+        adapter.on_task_request_labels(0, labels)
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], WorkerRequestLabels)
+        assert msgs[0].labels == labels
+
+    def test_on_qos_update(self):
+        from cdsswarm.textual_app import QosUpdate
+
+        adapter, app = self._make_adapter()
+        adapter.on_qos_update(100, 50, 400)
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], QosUpdate)
+        assert msgs[0].queued == 100
+        assert msgs[0].running == 50
+        assert msgs[0].limit == 400
+
+    def test_on_global_message(self):
+        from cdsswarm.textual_app import GlobalMessage
+
+        adapter, app = self._make_adapter()
+        adapter.on_global_message("All downloads completed")
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], GlobalMessage)
+        assert msgs[0].message == "All downloads completed"

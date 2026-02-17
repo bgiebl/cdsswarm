@@ -88,6 +88,18 @@ class TestLoadRequests:
         assert len(tasks) == 1
         assert tasks[0].dataset == "reanalysis-era5-single-levels"
 
+    def test_yaml_import_error(self, tmp_dir):
+        """YAML file raises ImportError when PyYAML is not installed."""
+        import sys
+
+        path = os.path.join(tmp_dir, "requests.yaml")
+        with open(path, "w") as f:
+            f.write("- dataset: ds\n  request: {}\n  target: out.grib\n")
+
+        with patch.dict(sys.modules, {"yaml": None}):
+            with pytest.raises(ImportError, match="PyYAML is required"):
+                load_requests(path)
+
     def test_invalid_format(self, tmp_dir):
         from cdsswarm.exceptions import RequestFileError
 
