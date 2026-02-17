@@ -87,11 +87,13 @@ class TestLoadRequests:
         assert tasks[0].dataset == "reanalysis-era5-single-levels"
 
     def test_invalid_format(self, tmp_dir):
+        from cdsswarm.exceptions import RequestFileError
+
         path = os.path.join(tmp_dir, "bad.json")
         with open(path, "w") as f:
             json.dump({"foo": "bar"}, f)
 
-        with pytest.raises(ValueError, match="Unrecognized format"):
+        with pytest.raises(RequestFileError, match="Unrecognized format"):
             load_requests(path)
 
 
@@ -265,6 +267,34 @@ class TestConfigIntegration:
 
         output = capsys.readouterr().out
         assert "data/cds/out.grib" in output
+
+    def test_output_dir_rejects_path_traversal(self, tmp_dir, capsys):
+        """--output-dir rejects targets that escape the output directory."""
+        from unittest.mock import patch
+
+        from cdsswarm.cli import main
+
+        requests_file = os.path.join(tmp_dir, "requests.json")
+        with open(requests_file, "w") as f:
+            json.dump(
+                [{"dataset": "ds", "request": {}, "target": "../../etc/passwd"}], f
+            )
+
+        with (
+            patch(
+                "cdsswarm.config.USER_CONFIG_PATH",
+                __import__("pathlib").Path(tmp_dir) / "nope.toml",
+            ),
+            patch(
+                "cdsswarm.config.Path.cwd",
+                return_value=__import__("pathlib").Path(tmp_dir),
+            ),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            main([requests_file, "--dry-run", "--output-dir", "data/cds"])
+
+        err = capsys.readouterr().err
+        assert "escapes output directory" in err
 
     def test_output_dir_from_config(self, tmp_dir, capsys):
         """output-dir from config file is applied."""

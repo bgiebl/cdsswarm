@@ -230,4 +230,6 @@ def export_summary(
                     ]
                 )
     else:
-        raise ValueError(f"Unsupported summary format: {path!r} (use .json or .csv)")
+        from .exceptions import ConfigError
+
+        raise ConfigError(f"Unsupported summary format: {path!r} (use .json or .csv)")

@@ -69,7 +69,9 @@ def load_requests(path: str) -> list[Task]:
             for item in data["requests"]
         ]
 
-    raise ValueError(f"Unrecognized format in {path}")
+    from .exceptions import RequestFileError
+
+    raise RequestFileError(f"Unrecognized format in {path}")
 
 
 def _resolve_mode(mode: str) -> str:
@@ -282,9 +284,21 @@ def main(argv: list[str] | None = None):
     # Apply output_dir: prepend to relative target paths.
     output_dir = settings["output_dir"]
     if output_dir:
+        resolved_base = os.path.realpath(output_dir)
         for task in tasks:
             if not os.path.isabs(task.target):
-                task.target = os.path.join(output_dir, task.target)
+                joined = os.path.join(output_dir, task.target)
+                resolved = os.path.realpath(joined)
+                if (
+                    not resolved.startswith(resolved_base + os.sep)
+                    and resolved != resolved_base
+                ):
+                    print(
+                        f"Error: target '{task.target}' escapes output directory '{output_dir}'",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                task.target = joined
 
     if args.dry_run:
         print(f"{'Target':<50} {'Dataset':<40} {'Exists'}")

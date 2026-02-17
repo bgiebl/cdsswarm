@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/bgiebl/cdsswarm/actions/workflows/ci.yml/badge.svg)](https://github.com/bgiebl/cdsswarm/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/bgiebl/cdsswarm/branch/main/graph/badge.svg)](https://codecov.io/gh/bgiebl/cdsswarm)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 Concurrent [CDS API](https://cds.climate.copernicus.eu/) downloader with an interactive Textual TUI and script mode.
 

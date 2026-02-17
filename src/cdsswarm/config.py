@@ -61,23 +61,25 @@ def _load_toml(path: Path) -> dict[str, object]:
 
 
 def _validate_config(config: dict[str, object], source: str) -> None:
-    """Validate types and values. Raises ValueError on problems."""
+    """Validate types and values. Raises ConfigError on problems."""
+    from .exceptions import ConfigError
+
     for key, value in config.items():
         expected = _TYPE_CHECKS.get(key)
         if expected and not isinstance(value, expected):
-            raise ValueError(
+            raise ConfigError(
                 f"{source}: '{key}' must be {expected.__name__}, "
                 f"got {type(value).__name__}"
             )
         allowed = _VALUE_CHECKS.get(key)
         if allowed and value not in allowed:
-            raise ValueError(
+            raise ConfigError(
                 f"{source}: '{key}' must be one of {allowed}, got '{value}'"
             )
         if key == "workers" and isinstance(value, int) and value < 1:
-            raise ValueError(f"{source}: 'workers' must be >= 1, got {value}")
+            raise ConfigError(f"{source}: 'workers' must be >= 1, got {value}")
         if key == "max_retries" and isinstance(value, int) and value < 1:
-            raise ValueError(f"{source}: 'max_retries' must be >= 1, got {value}")
+            raise ConfigError(f"{source}: 'max_retries' must be >= 1, got {value}")
 
 
 def load_config() -> dict[str, object]:

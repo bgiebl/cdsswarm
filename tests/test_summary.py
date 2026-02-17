@@ -184,8 +184,10 @@ class TestExportSummary:
             assert len(rows) == 3  # header + 2 tasks
 
     def test_bad_extension_raises(self):
+        from cdsswarm.exceptions import ConfigError
+
         results = [_make_result("a.grib")]
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "report.txt")
-            with pytest.raises(ValueError, match="Unsupported summary format"):
+            with pytest.raises(ConfigError, match="Unsupported summary format"):
                 export_summary(results, 100.0, 200.0, path)

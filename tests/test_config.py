@@ -74,7 +74,9 @@ class TestValidateConfig:
         _validate_config({"workers": 4, "mode": "script"}, "test")
 
     def test_wrong_type(self):
-        with pytest.raises(ValueError, match="must be int"):
+        from cdsswarm.exceptions import ConfigError
+
+        with pytest.raises(ConfigError, match="must be int"):
             _validate_config({"workers": "four"}, "test")
 
     def test_invalid_mode(self):
