@@ -559,3 +559,140 @@ class TestMainDownloadFlow:
 
         # Log file should exist and be closed (writing should succeed normally)
         assert os.path.isfile(log_path)
+
+    def test_interactive_mode_calls_run_interactive(self, tmp_dir):
+        """Interactive mode calls _run_interactive and exits based on results."""
+        path = self._write_tasks(tmp_dir)
+        task = Task("ds", {}, "out.grib")
+        results = [Result(task=task, success=True, start_time=100.0, end_time=200.0)]
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch("cdsswarm.cli._resolve_mode", return_value="interactive"),
+            patch("cdsswarm.cli._run_interactive", return_value=results) as mock_ri,
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path])
+
+        mock_ri.assert_called_once()
+
+
+class TestRunInteractive:
+    def _capture_lazy(self, MockApp, download_results=None):
+        """Helper: configure MockApp to capture the lazy downloader."""
+        captured = []
+
+        def capture_app(**kwargs):
+            captured.append(kwargs.get("downloader"))
+            mock_app = MagicMock()
+            mock_app.download_results = download_results
+            return mock_app
+
+        MockApp.side_effect = capture_app
+        return captured
+
+    def test_basic(self):
+        """_run_interactive creates CdsswarmApp and calls app.run()."""
+        from cdsswarm.cli import _run_interactive
+
+        tasks = [Task("ds", {}, "out.grib")]
+
+        with patch("cdsswarm.textual_app.CdsswarmApp") as MockApp:
+            mock_app = MagicMock()
+            mock_app.download_results = [Result(task=tasks[0], success=True)]
+            MockApp.return_value = mock_app
+
+            result = _run_interactive(tasks, num_workers=2, skip_existing=True)
+
+            MockApp.assert_called_once()
+            mock_app.run.assert_called_once()
+            assert result == mock_app.download_results
+
+    def test_lazy_downloader_run_creates_real(self):
+        """Calling lazy.run() creates SwarmDownloader and delegates run()."""
+        from cdsswarm.cli import _run_interactive
+
+        tasks = [Task("ds", {}, "out.grib")]
+
+        with (
+            patch("cdsswarm.textual_app.CdsswarmApp") as MockApp,
+            patch("cdsswarm.cli.SwarmDownloader") as MockSD,
+        ):
+            captured = self._capture_lazy(MockApp)
+            mock_sd_instance = MagicMock()
+            mock_sd_instance.run.return_value = [Result(task=tasks[0], success=True)]
+            MockSD.return_value = mock_sd_instance
+
+            _run_interactive(tasks, num_workers=2, skip_existing=True)
+
+            lazy = captured[0]
+            result = lazy.run()
+
+            MockSD.assert_called_once()
+            call_kw = MockSD.call_args[1]
+            assert call_kw["num_workers"] == 2
+            assert call_kw["skip_existing"] is True
+            mock_sd_instance.run.assert_called_once()
+            assert result == mock_sd_instance.run.return_value
+
+    def test_lazy_downloader_run_with_log_file(self):
+        """Calling lazy.run() with log_file wraps adapter in LoggingAdapter."""
+        from cdsswarm.adapters import LoggingAdapter
+        from cdsswarm.cli import _run_interactive
+
+        tasks = [Task("ds", {}, "out.grib")]
+        log_file = io.StringIO()
+
+        with (
+            patch("cdsswarm.textual_app.CdsswarmApp") as MockApp,
+            patch("cdsswarm.cli.SwarmDownloader") as MockSD,
+        ):
+            captured = self._capture_lazy(MockApp)
+            MockSD.return_value = MagicMock()
+
+            _run_interactive(
+                tasks, num_workers=1, skip_existing=False, log_file=log_file
+            )
+
+            lazy = captured[0]
+            lazy.run()
+
+            call_kw = MockSD.call_args[1]
+            assert isinstance(call_kw["adapter"], LoggingAdapter)
+
+    def test_lazy_downloader_cancel_before_run(self):
+        """Calling cancel() before run() on lazy downloader doesn't crash."""
+        from cdsswarm.cli import _run_interactive
+
+        tasks = [Task("ds", {}, "out.grib")]
+
+        with patch("cdsswarm.textual_app.CdsswarmApp") as MockApp:
+            captured = self._capture_lazy(MockApp)
+            _run_interactive(tasks, num_workers=1, skip_existing=False)
+
+            lazy = captured[0]
+            lazy.cancel()  # No-op, _real is None
+
+    def test_lazy_downloader_cancel_after_run(self):
+        """Calling cancel() after run() delegates to _real.cancel()."""
+        from cdsswarm.cli import _run_interactive
+
+        tasks = [Task("ds", {}, "out.grib")]
+
+        with (
+            patch("cdsswarm.textual_app.CdsswarmApp") as MockApp,
+            patch("cdsswarm.cli.SwarmDownloader") as MockSD,
+        ):
+            captured = self._capture_lazy(MockApp)
+            mock_sd_instance = MagicMock()
+            MockSD.return_value = mock_sd_instance
+
+            _run_interactive(tasks, num_workers=1, skip_existing=False)
+
+            lazy = captured[0]
+            lazy.run()  # Creates _real
+            lazy.cancel()  # Should delegate to _real.cancel()
+
+            mock_sd_instance.cancel.assert_called_once()

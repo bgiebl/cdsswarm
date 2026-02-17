@@ -1,5 +1,7 @@
 """Tests for the Textual TUI."""
 
+import time
+
 import pytest
 from textual.widgets import DataTable
 
@@ -10,8 +12,11 @@ from cdsswarm.textual_app import (
     ChecksumScreen,
     FileActive,
     FileCompleted,
+    FileData,
+    FilesInfoPanel,
     GlobalMessage,
     LogScreen,
+    MeterBar,
     ParamsScreen,
     ProgressUpdate,
     QosUpdate,
@@ -23,6 +28,7 @@ from cdsswarm.textual_app import (
     WorkerDatasetTitle,
     WorkerFileSize,
     WorkerFinished,
+    WorkerInfoPanel,
     WorkerMessage,
     WorkerProgress,
     WorkerRequestId,
@@ -563,3 +569,484 @@ async def test_checksum_screen_retry():
         await pilot.pause()
         assert result_event.is_set()
         assert result_holder[0] == "retry"
+
+
+# ---------------------------------------------------------------------------
+# Group A: Widget rendering edge cases (pure function tests)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerInfoPanelRendering:
+    def test_no_worker(self):
+        panel = WorkerInfoPanel()
+        assert panel.render_worker(w=None, worker_id=0) == "No worker selected"
+
+    def test_format_queue_wait_no_server_started(self):
+        """Queue wait computes elapsed against now when server_started is None."""
+        panel = WorkerInfoPanel()
+        w = WorkerData()
+        w.server_created = "2020-01-01T00:00:00Z"
+        w.server_started = None
+        result = panel._format_queue_wait(w)
+        assert result != ""  # Should show time since 2020
+
+    def test_format_queue_wait_invalid_date(self):
+        """Invalid date returns empty string."""
+        panel = WorkerInfoPanel()
+        w = WorkerData()
+        w.server_created = "bad"
+        assert panel._format_queue_wait(w) == ""
+
+    def test_format_queue_wait_no_server_created(self):
+        """No server_created returns empty string."""
+        panel = WorkerInfoPanel()
+        w = WorkerData()
+        w.server_created = None
+        assert panel._format_queue_wait(w) == ""
+
+
+class TestFilesInfoPanelRendering:
+    def test_no_file(self):
+        panel = FilesInfoPanel()
+        assert panel.render_file([], 0) == "No file selected"
+
+    def test_empty_request(self):
+        panel = FilesInfoPanel()
+        fd = FileData(target="/tmp/f.grib", dataset="ds", label="f.grib", request={})
+        result = panel.render_file([fd], 0)
+        assert "\u2014" in result
+
+
+class TestMeterBarRendering:
+    def test_eta_dots_with_eta_start_no_completed(self):
+        """Shows 'ETA ...' when eta_start is set but completed=0."""
+        meter = MeterBar()
+        result = meter.render_progress(
+            completed=0,
+            total=10,
+            skipped=0,
+            eta_start=time.monotonic(),
+            status="",
+            qos_queued=0,
+            qos_running=0,
+            qos_limit=0,
+        )
+        assert "ETA ..." in result
+
+    def test_eta_dots_no_eta_start(self):
+        """Shows 'ETA ...' when eta_start is None and completed=0 with total>0."""
+        meter = MeterBar()
+        result = meter.render_progress(
+            completed=0,
+            total=10,
+            skipped=0,
+            eta_start=None,
+            status="",
+            qos_queued=0,
+            qos_running=0,
+            qos_limit=0,
+        )
+        assert "ETA ..." in result
+
+    def test_preparing_when_no_total(self):
+        meter = MeterBar()
+        result = meter.render_progress(
+            completed=0,
+            total=0,
+            skipped=0,
+            eta_start=None,
+            status="",
+            qos_queued=0,
+            qos_running=0,
+            qos_limit=0,
+        )
+        assert "Preparing..." in result
+
+
+# ---------------------------------------------------------------------------
+# Group B: Click handlers (async pilot tests)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tab_strip_click_workers():
+    """Clicking left side of TabStrip switches to workers tab."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        # Switch to files first
+        await pilot.press("t")
+        assert app._active_tab == "files"
+        # Click left side of tab strip
+        await pilot.click("#tab-strip", offset=(5, 0))
+        assert app._active_tab == "workers"
+
+
+@pytest.mark.asyncio
+async def test_tab_strip_click_files():
+    """Clicking right side of TabStrip switches to files tab."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        assert app._active_tab == "workers"
+        await pilot.click("#tab-strip", offset=(15, 0))
+        assert app._active_tab == "files"
+
+
+@pytest.mark.asyncio
+async def test_key_bar_click_quit():
+    """Clicking quit zone of KeyBar exits."""
+    from unittest.mock import patch
+
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        with patch.object(app, "action_quit_app") as mock_quit:
+            await pilot.click("#key-bar", offset=(5, 0))
+            mock_quit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_key_bar_click_tab():
+    """Clicking tab zone of KeyBar toggles tab."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        assert app._active_tab == "workers"
+        await pilot.click("#key-bar", offset=(14, 0))
+        assert app._active_tab == "files"
+
+
+@pytest.mark.asyncio
+async def test_key_bar_click_logs():
+    """Clicking logs zone of KeyBar opens LogScreen."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        await pilot.click("#key-bar", offset=(25, 0))
+        await pilot.pause()
+        assert isinstance(app.screen, LogScreen)
+
+
+@pytest.mark.asyncio
+async def test_key_bar_click_params():
+    """Clicking params zone of KeyBar opens ParamsScreen."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        await pilot.click("#key-bar", offset=(35, 0))
+        await pilot.pause()
+        assert isinstance(app.screen, ParamsScreen)
+
+
+@pytest.mark.asyncio
+async def test_back_bar_click_dismisses():
+    """Clicking the BackBar on LogScreen dismisses it."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        app.worker_data[0].filename = "test.grib"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, LogScreen)
+        await pilot.click("#log-header")
+        await pilot.pause()
+        assert not isinstance(app.screen, LogScreen)
+
+
+# ---------------------------------------------------------------------------
+# Group C: Screens
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_params_screen_with_labels():
+    """ParamsScreen shows labels when provided."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        from textual.widgets import Static
+
+        app.push_screen(ParamsScreen(0, {"k": "v"}, labels={"Label": "Value"}))
+        await pilot.pause()
+        assert isinstance(app.screen, ParamsScreen)
+        content = app.screen.query_one("#params-content", Static)
+        assert "Label:" in str(content.content)
+
+
+@pytest.mark.asyncio
+async def test_params_screen_empty():
+    """ParamsScreen shows dash when params are empty."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        from textual.widgets import Static
+
+        app.push_screen(ParamsScreen(0, {}, None))
+        await pilot.pause()
+        content = app.screen.query_one("#params-content", Static)
+        assert "\u2014" in str(content.content)
+
+
+@pytest.mark.asyncio
+async def test_checksum_compute_actual_exception():
+    """ChecksumScreen shows '?' when file doesn't exist."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        import threading
+
+        result_event = threading.Event()
+        result_holder: list[str] = []
+        app.worker_data[0].filename = "test.grib"
+        app.worker_data[0].target = "/nonexistent/path/test.grib"
+        app.post_message(ShowChecksumDialog(0, "abc123", result_event, result_holder))
+        await pilot.pause()
+        assert isinstance(app.screen, ChecksumScreen)
+        # Verify "?" appears in the checksum info (from _compute_actual)
+        from textual.widgets import Static
+
+        info = app.screen.query_one(".checksum-info", Static)
+        assert "?" in str(info.content)
+
+
+@pytest.mark.asyncio
+async def test_checksum_button_retry():
+    """Clicking retry button on ChecksumScreen returns 'retry'."""
+    import threading
+
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        app.worker_data[0].filename = "test.grib"
+        app.worker_data[0].target = "/tmp/test.grib"
+        result_event = threading.Event()
+        result_holder: list[str] = []
+        app.post_message(ShowChecksumDialog(0, "abc123", result_event, result_holder))
+        await pilot.pause()
+        assert isinstance(app.screen, ChecksumScreen)
+        await pilot.click("#checksum-retry")
+        await pilot.pause()
+        assert result_event.is_set()
+        assert result_holder[0] == "retry"
+
+
+@pytest.mark.asyncio
+async def test_checksum_button_continue():
+    """Clicking continue button on ChecksumScreen returns 'continue'."""
+    import threading
+
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        app.worker_data[0].filename = "test.grib"
+        app.worker_data[0].target = "/tmp/test.grib"
+        result_event = threading.Event()
+        result_holder: list[str] = []
+        app.post_message(ShowChecksumDialog(0, "abc123", result_event, result_holder))
+        await pilot.pause()
+        assert isinstance(app.screen, ChecksumScreen)
+        await pilot.click("#checksum-continue")
+        await pilot.pause()
+        assert result_event.is_set()
+        assert result_holder[0] == "continue"
+
+
+# ---------------------------------------------------------------------------
+# Group D: App-level behavior
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_app_with_downloader():
+    """App calls downloader.run() when downloader is provided."""
+    from unittest.mock import MagicMock
+
+    mock_downloader = MagicMock()
+    mock_downloader.run.return_value = []
+    app = CdsswarmApp(num_workers=2, downloader=mock_downloader)
+    async with app.run_test() as pilot:
+        # Give background thread time to call run()
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+    mock_downloader.run.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_tick_elapsed_updates_table():
+    """Elapsed cell updates when worker is running (via _tick_elapsed)."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        app.post_message(WorkerStarted(0, "test.grib", "ds", {}, "/out/test.grib"))
+        await pilot.pause()
+        # Force a tick to update elapsed
+        app._tick_elapsed()
+        await pilot.pause()
+        wt = app.query_one("#worker-table", DataTable)
+        row = wt.get_row("0")
+        elapsed_cell = str(row[5])  # Elapsed is index 5
+        assert "m" in elapsed_cell or "s" in elapsed_cell
+
+
+@pytest.mark.asyncio
+async def test_worker_finished_dl_pct():
+    """WorkerFinished shows checkmark in DL% when dl_total > 0."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        app.post_message(WorkerStarted(0, "test.grib", "ds", {}, "/out/test.grib"))
+        await pilot.pause()
+        app.post_message(WorkerProgress(0, 1000, 1000))
+        await pilot.pause()
+        app.post_message(WorkerFinished(0))
+        await pilot.pause()
+        wt = app.query_one("#worker-table", DataTable)
+        row = wt.get_row("0")
+        dl_pct_cell = str(row[7])  # DL % is index 7
+        assert "\u2713" in dl_pct_cell
+
+
+@pytest.mark.asyncio
+async def test_quit_with_downloader():
+    """Pressing 'q' with downloader cancels and exits."""
+    from unittest.mock import MagicMock
+
+    mock_downloader = MagicMock()
+    # Make run() block until cancelled
+    import threading
+
+    block = threading.Event()
+    mock_downloader.run.side_effect = lambda: block.wait(2)
+    app = CdsswarmApp(num_workers=2, downloader=mock_downloader)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_quit_app()
+        await pilot.pause()
+        assert app._cancel_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_ctrl_c_first_press():
+    """First Ctrl+C increments count and triggers quit."""
+    from unittest.mock import patch
+
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test():
+        with patch.object(app, "action_quit_app") as mock_quit:
+            app.action_ctrl_c()
+            assert app._ctrl_c_count == 1
+            mock_quit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_ctrl_c_rage_quit():
+    """Second Ctrl+C exits immediately."""
+    from unittest.mock import patch
+
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test():
+        app._ctrl_c_count = 1
+        with patch.object(app, "exit") as mock_exit:
+            app.action_ctrl_c()
+            assert app._ctrl_c_count == 2
+            mock_exit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_open_params_on_files_tab():
+    """Pressing 'a' on files tab does not open ParamsScreen."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        await pilot.press("t")
+        assert app._active_tab == "files"
+        await pilot.press("a")
+        await pilot.pause()
+        assert not isinstance(app.screen, ParamsScreen)
+
+
+@pytest.mark.asyncio
+async def test_open_logs_on_files_tab():
+    """Pressing enter on files tab does not open LogScreen."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        await pilot.press("t")
+        assert app._active_tab == "files"
+        app._open_worker_logs()
+        await pilot.pause()
+        assert not isinstance(app.screen, LogScreen)
+
+
+@pytest.mark.asyncio
+async def test_file_row_successful_checkmark():
+    """Successful file row shows checkmark in DL%."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        tasks = _make_tasks(2)
+        app.post_message(TasksInitialized(tasks, set()))
+        await pilot.pause()
+        app.post_message(FileActive(tasks[0].target, 0))
+        await pilot.pause()
+        app.post_message(WorkerProgress(0, 500, 1000))
+        await pilot.pause()
+        app.post_message(FileCompleted(tasks[0].target, True))
+        await pilot.pause()
+        ft = app.query_one("#files-table", DataTable)
+        row = ft.get_row("0")
+        dl_pct_cell = str(row[6])  # DL % is index 6 in files table
+        assert "\u2713" in dl_pct_cell
+
+
+# ---------------------------------------------------------------------------
+# Group E: Remaining coverage (L637, L1225, L1286)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_checksum_compute_actual_success():
+    """ChecksumScreen._compute_actual() returns real hash when file exists."""
+    import hashlib
+    import tempfile
+
+    content = b"test content for checksum"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".grib") as f:
+        f.write(content)
+        tmp_path = f.name
+
+    try:
+        # Build a valid sha256 multihash: code=0x12, length=0x20 (32 bytes)
+        sha_digest = hashlib.sha256(content).digest()
+        mh_hex = "1220" + sha_digest.hex()
+
+        screen = ChecksumScreen(
+            worker_id=0,
+            filename="test.grib",
+            expected=mh_hex,
+            target=tmp_path,
+        )
+        actual = screen._compute_actual()
+        assert actual == sha_digest.hex()
+    finally:
+        import os
+
+        os.unlink(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_quit_without_downloader():
+    """action_quit_app() calls exit() when downloader is None."""
+    from unittest.mock import patch
+
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test():
+        assert app.downloader is None
+        with patch.object(app, "exit") as mock_exit:
+            app.action_quit_app()
+            mock_exit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_update_worker_info_no_selection():
+    """_update_worker_info() shows 'No worker selected' when cursor is out of bounds."""
+    from unittest.mock import PropertyMock, patch
+
+    app = CdsswarmApp(num_workers=1)
+    async with app.run_test() as pilot:
+        # Patch cursor_row to return -1 (out of bounds)
+        with patch.object(
+            type(app.query_one("#worker-table", DataTable)),
+            "cursor_row",
+            new_callable=PropertyMock,
+            return_value=-1,
+        ):
+            app._update_worker_info()
+            await pilot.pause()
+        panel = app.query_one("#worker-info", WorkerInfoPanel)
+        assert "No worker selected" in str(panel.content)

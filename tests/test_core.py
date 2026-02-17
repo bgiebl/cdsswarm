@@ -839,3 +839,124 @@ class TestSwarmDownloader:
         assert len(results) == 1
         assert results[0].success
         mock_client.retrieve.assert_called_once()
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_cancel_event_during_downloads(self, mock_cdsapi, tmp_dir):
+        """Setting cancel event during downloads returns None."""
+        import threading
+
+        mock_client = MagicMock()
+        barrier = threading.Event()
+
+        def slow_retrieve(dataset, request, target):
+            barrier.set()
+            # Wait a bit to give cancel time to trigger
+            import time
+
+            time.sleep(1)
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = slow_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1)
+
+        def cancel_later():
+            barrier.wait(5)
+            downloader.cancel()
+
+        t = threading.Thread(target=cancel_later)
+        t.start()
+        results = downloader.run()
+        t.join()
+        assert results is None
+
+    @patch("cdsswarm.core.as_completed")
+    @patch("cdsswarm.core.cdsapi")
+    def test_keyboard_interrupt_cancels(self, mock_cdsapi, mock_as_completed, tmp_dir):
+        """KeyboardInterrupt during as_completed returns None with message."""
+        mock_client = MagicMock()
+        mock_cdsapi.Client.return_value = mock_client
+
+        mock_as_completed.side_effect = KeyboardInterrupt()
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1)
+        results = downloader.run()
+
+        assert results is None
+        interrupted_msgs = [
+            str(c)
+            for c in adapter.on_global_message.call_args_list
+            if "Interrupted" in str(c)
+        ]
+        assert len(interrupted_msgs) >= 1
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_double_keyboard_interrupt(self, mock_cdsapi, tmp_dir):
+        """Double KeyboardInterrupt sends 'Force quit' message."""
+        mock_client = MagicMock()
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1)
+
+        # Patch as_completed and _cancel_active to both raise KeyboardInterrupt
+        with patch("cdsswarm.core.as_completed", side_effect=KeyboardInterrupt()):
+            with patch.object(
+                downloader, "_cancel_active", side_effect=KeyboardInterrupt()
+            ):
+                results = downloader.run()
+
+        assert results is None
+        force_msgs = [
+            str(c)
+            for c in adapter.on_global_message.call_args_list
+            if "Force quit" in str(c)
+        ]
+        assert len(force_msgs) >= 1
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_cancel_during_retry_sleep(self, mock_cdsapi, tmp_dir):
+        """Cancel event during retry sleep stops retrying."""
+        import threading
+
+        mock_client = MagicMock()
+        call_count = [0]
+        cancel_trigger = threading.Event()
+
+        def fail_once(dataset, request, target):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                cancel_trigger.set()
+                raise RuntimeError("transient error")
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fail_once
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, max_retries=3)
+
+        def cancel_after_trigger():
+            cancel_trigger.wait(5)
+            # Small delay to let retry loop start sleeping
+            import time
+
+            time.sleep(0.1)
+            downloader._cancel_event.set()
+
+        t = threading.Thread(target=cancel_after_trigger)
+        t.start()
+        downloader.run()
+        t.join()
+        # Either returns None (cancel during as_completed) or a failed result
+        # The important thing is it stopped retrying
+        assert call_count[0] <= 2  # Should not have made 3 attempts

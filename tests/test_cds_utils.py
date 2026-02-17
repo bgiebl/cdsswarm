@@ -294,6 +294,58 @@ class TestInstallProgressRouter:
             else:
                 del sys.modules["tqdm"]
 
+    def test_progress_router_skips_none_modules(self):
+        """install_progress_router skips sys.modules entries that are None."""
+        import sys
+        import threading
+
+        adapter = MagicMock()
+        lock = threading.Lock()
+
+        # Insert a None module under cdsapi namespace
+        key = "cdsapi._test_none_sentinel"
+        try:
+            sys.modules[key] = None  # type: ignore
+            router_state = install_progress_router(adapter, {}, lock)
+            # Should not crash — just skips None modules
+            assert isinstance(router_state, dict)
+        finally:
+            sys.modules.pop(key, None)
+            uninstall_progress_router(router_state)
+
+    def test_install_progress_router_setattr_exception(self):
+        """install_progress_router handles modules where setattr raises."""
+        import sys
+        import threading
+        import types
+
+        adapter = MagicMock()
+        lock = threading.Lock()
+
+        # Create a module-like object that raises on setattr for tqdm attr
+        frozen = types.ModuleType("cdsapi._frozen_test")
+        import tqdm
+
+        frozen.tqdm = tqdm.tqdm  # Has the original tqdm reference
+
+        class FrozenMeta(type(frozen)):
+            def __setattr__(self, name, value):
+                if name == "tqdm":
+                    raise AttributeError("frozen")
+                super().__setattr__(name, value)
+
+        frozen.__class__ = FrozenMeta
+
+        key = "cdsapi._frozen_test"
+        try:
+            sys.modules[key] = frozen
+            router_state = install_progress_router(adapter, {}, lock)
+            # Should not crash
+            assert isinstance(router_state, dict)
+        finally:
+            sys.modules.pop(key, None)
+            uninstall_progress_router(router_state)
+
 
 class TestFindReusableJobs:
     def test_old_client_returns_empty(self):
