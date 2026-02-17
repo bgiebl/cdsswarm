@@ -481,6 +481,36 @@ class TestMetadataPoller:
         # No client registered, so no callbacks should have fired
         adapter.on_task_server_progress.assert_not_called()
 
+    @patch("cdsswarm._cds_metadata.fetch_job_metadata")
+    def test_run_polls_with_registered_client(self, mock_fetch):
+        """_run loop calls _poll_once when inner client is registered."""
+        adapter = MagicMock()
+        state = MagicMock()
+        state.lock = threading.Lock()
+        state.active_requests = {"target.grib": ("rid-1", MagicMock())}
+        state.task_worker_map = {"target.grib": 0}
+        cancel = threading.Event()
+
+        meta = JobMetadata(job_id="rid-1", progress=50)
+        mock_fetch.return_value = (meta, None)
+
+        poller = MetadataPoller(adapter, state, cancel, poll_interval=0.05)
+        # Register inner client before starting
+        mock_inner = MagicMock()
+        mock_inner._get_headers = MagicMock()
+        mock_client = MagicMock()
+        mock_client.client = mock_inner
+        poller.register_client(mock_client)
+
+        poller.start()
+        time.sleep(0.15)
+        cancel.set()
+        poller._thread.join(timeout=2)
+
+        # _poll_once was called via _run with the registered inner client
+        mock_fetch.assert_called()
+        adapter.on_task_server_progress.assert_called()
+
     def test_poll_once_no_active_requests(self):
         """Empty active_requests → early return, no fetch calls."""
         adapter = MagicMock()

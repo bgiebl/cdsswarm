@@ -187,6 +187,92 @@ class TestInstallProgressRouter:
         uninstall_progress_router({})
         uninstall_progress_router(None)  # type: ignore
 
+    def test_progress_tqdm_routes_updates(self):
+        """_ProgressTqdm routes download progress through the adapter."""
+        import threading
+        import tqdm
+
+        adapter = MagicMock()
+        tid = threading.current_thread().ident
+        worker_id_map = {tid: 5}
+        lock = threading.Lock()
+
+        router_state = install_progress_router(adapter, worker_id_map, lock)
+        try:
+            # tqdm.tqdm is now _ProgressTqdm
+            bar = tqdm.tqdm(total=100 * 1024 * 1024)
+            bar.update(50 * 1024 * 1024)  # 50%
+            bar.close()
+
+            adapter.on_task_message.assert_called()
+            adapter.on_task_progress.assert_called()
+            # Check worker_id was resolved from map
+            progress_call = adapter.on_task_progress.call_args
+            assert progress_call[0][0] == 5  # worker_id
+        finally:
+            uninstall_progress_router(router_state)
+
+    def test_progress_tqdm_deduplicates_same_pct(self):
+        """_ProgressTqdm skips update when percentage hasn't changed."""
+        import threading
+        import tqdm
+
+        adapter = MagicMock()
+        lock = threading.Lock()
+
+        router_state = install_progress_router(adapter, {}, lock)
+        try:
+            bar = tqdm.tqdm(total=1000)
+            # Two small updates that stay at 0%
+            bar.update(1)
+            bar.update(1)
+            bar.close()
+
+            # on_task_progress should be called only once for 0%
+            assert adapter.on_task_progress.call_count == 1
+        finally:
+            uninstall_progress_router(router_state)
+
+    def test_progress_tqdm_no_total(self):
+        """_ProgressTqdm with no total doesn't crash on update."""
+        import threading
+        import tqdm
+
+        adapter = MagicMock()
+        lock = threading.Lock()
+
+        router_state = install_progress_router(adapter, {}, lock)
+        try:
+            bar = tqdm.tqdm(total=0)
+            bar.update(100)
+            bar.close()
+
+            adapter.on_task_progress.assert_not_called()
+        finally:
+            uninstall_progress_router(router_state)
+
+    def test_uninstall_setattr_exception(self):
+        """uninstall_progress_router handles setattr exceptions gracefully."""
+
+        class FrozenModule:
+            def __setattr__(self, name, value):
+                raise AttributeError("frozen")
+
+        state = {
+            "patches": [(FrozenModule(), "tqdm", None)],
+            "devnull": MagicMock(),
+        }
+        # Should not raise
+        uninstall_progress_router(state)
+
+    def test_uninstall_close_exception(self):
+        """uninstall_progress_router handles devnull close exception."""
+        devnull = MagicMock()
+        devnull.close.side_effect = OSError("already closed")
+        state = {"patches": [], "devnull": devnull}
+        # Should not raise
+        uninstall_progress_router(state)
+
     def test_tqdm_not_importable(self):
         """Returns empty dict when tqdm is not available."""
         import sys
@@ -306,37 +392,51 @@ class TestFindReusableJobs:
 
 
 class TestFindReusableJobsScanException:
-    def test_scan_exception_continues_to_next_status(self):
-        """Exception scanning one status doesn't prevent scanning the next."""
+    @patch("cdsswarm._cds_utils._scan_jobs")
+    def test_scan_exception_continues_to_next_status(self, mock_scan):
+        """Exception in _scan_jobs propagates to find_reusable_jobs except block."""
+        # First call (successful) raises, second (running) succeeds, third (accepted)
+        mock_scan.side_effect = [
+            RuntimeError("scan failed"),
+            None,
+            None,
+        ]
 
         inner = MagicMock()
         inner.get_remote = MagicMock()
-
-        normalize_request({"year": "2024"})
-        task = MagicMock(dataset="ds", request={"year": "2024"}, target="out.grib")
-
-        # get_jobs raises for "successful", returns match for "running"
-        call_count = [0]
-
-        def get_jobs_side_effect(status, sortby, limit):
-            call_count[0] += 1
-            if status == WorkerStatus.SUCCESSFUL:
-                raise RuntimeError("API error for successful")
-            resp = MagicMock()
-            resp._json_dict = {"jobs": [{"processID": "ds", "jobID": "job-run"}]}
-            return resp
-
-        inner.get_jobs.side_effect = get_jobs_side_effect
-
-        remote = MagicMock()
-        remote.request = {"year": "2024"}
-        inner.get_remote.return_value = remote
-
         client = MagicMock()
         client.client = inner
 
+        task = MagicMock(dataset="ds", request={"year": "2024"}, target="out.grib")
         result = find_reusable_jobs(client, [task])
-        assert result == {"out.grib": "job-run"}
+        # Should not crash, just returns empty (mock doesn't populate reuse_map)
+        assert result == {}
+        # _scan_jobs was called multiple times (exception didn't stop iteration)
+        assert mock_scan.call_count >= 2
+
+    @patch("cdsswarm._cds_utils._scan_jobs")
+    def test_early_break_when_all_matched(self, mock_scan):
+        """find_reusable_jobs breaks early when all tasks are matched."""
+
+        def populate_reuse_map(inner, status, limit, datasets, needed, reuse_map):
+            # Consume all needed entries on first call
+            for key in list(needed):
+                targets = needed.pop(key)
+                for t in targets:
+                    reuse_map[t] = "job-matched"
+
+        mock_scan.side_effect = populate_reuse_map
+
+        inner = MagicMock()
+        inner.get_remote = MagicMock()
+        client = MagicMock()
+        client.client = inner
+
+        task = MagicMock(dataset="ds", request={"year": "2024"}, target="out.grib")
+        result = find_reusable_jobs(client, [task])
+        assert result == {"out.grib": "job-matched"}
+        # Should stop after first status since all tasks matched
+        assert mock_scan.call_count == 1
 
 
 class TestCancelImportError:

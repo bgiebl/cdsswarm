@@ -6,8 +6,8 @@ from pathlib import Path
 
 try:
     import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib  # type: ignore[no-redef]  # pragma: no cover
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib  # type: ignore[no-redef]
 
 # Single source of truth for all default values.
 DEFAULTS: dict[str, object] = {
