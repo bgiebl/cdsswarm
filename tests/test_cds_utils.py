@@ -6,8 +6,10 @@ from cdsswarm._cds_utils import (
     _dict_key,
     _scan_jobs,
     cancel_cds_request,
+    cancel_cds_requests,
     find_reusable_jobs,
     install_progress_router,
+    list_active_jobs,
     normalize_request,
     parse_cds_status,
     parse_request_id,
@@ -489,6 +491,187 @@ class TestFindReusableJobsScanException:
         assert result == {"out.grib": "job-matched"}
         # Should stop after first status since all tasks matched
         assert mock_scan.call_count == 1
+
+
+class TestListActiveJobs:
+    def test_old_client_returns_empty(self):
+        """Old-style client (no .client attr) returns empty list."""
+        client = MagicMock(spec=["url", "session"])
+        result = list_active_jobs(client)
+        assert result == []
+
+    def test_client_without_get_remote_returns_empty(self):
+        """Client with .client but no get_remote returns empty list."""
+        inner = MagicMock(spec=["get_jobs"])  # no get_remote
+        client = MagicMock()
+        client.client = inner
+        result = list_active_jobs(client)
+        assert result == []
+
+    def test_lists_accepted_and_running(self):
+        """Returns jobs from both accepted and running statuses."""
+        accepted_response = MagicMock()
+        accepted_response._json_dict = {
+            "jobs": [
+                {
+                    "jobID": "job-1",
+                    "status": "accepted",
+                    "processID": "era5",
+                    "created": "2024-01-01T00:00:00Z",
+                }
+            ]
+        }
+        running_response = MagicMock()
+        running_response._json_dict = {
+            "jobs": [
+                {
+                    "jobID": "job-2",
+                    "status": "running",
+                    "processID": "era5",
+                    "created": "2024-01-02T00:00:00Z",
+                }
+            ]
+        }
+
+        inner = MagicMock()
+        inner.get_remote = MagicMock()
+        inner.get_jobs.side_effect = [accepted_response, running_response]
+
+        client = MagicMock()
+        client.client = inner
+
+        result = list_active_jobs(client)
+        assert len(result) == 2
+        assert result[0]["job_id"] == "job-1"
+        assert result[0]["status"] == "accepted"
+        assert result[0]["dataset"] == "era5"
+        assert result[1]["job_id"] == "job-2"
+        assert result[1]["status"] == "running"
+
+    def test_skips_jobs_without_id(self):
+        """Jobs with missing jobID are skipped."""
+        response = MagicMock()
+        response._json_dict = {"jobs": [{"processID": "ds"}]}  # no jobID
+
+        inner = MagicMock()
+        inner.get_remote = MagicMock()
+        inner.get_jobs.return_value = response
+
+        client = MagicMock()
+        client.client = inner
+
+        result = list_active_jobs(client)
+        assert result == []
+
+    def test_api_error_continues(self):
+        """get_jobs failure for one status doesn't prevent querying the next."""
+        running_response = MagicMock()
+        running_response._json_dict = {
+            "jobs": [
+                {
+                    "jobID": "job-1",
+                    "status": "running",
+                    "processID": "ds",
+                    "created": "",
+                }
+            ]
+        }
+
+        inner = MagicMock()
+        inner.get_remote = MagicMock()
+        inner.get_jobs.side_effect = [RuntimeError("API error"), running_response]
+
+        client = MagicMock()
+        client.client = inner
+
+        result = list_active_jobs(client)
+        assert len(result) == 1
+        assert result[0]["job_id"] == "job-1"
+
+    def test_defaults_for_missing_fields(self):
+        """Missing status/processID/created fields get default values."""
+        response = MagicMock()
+        response._json_dict = {"jobs": [{"jobID": "job-1"}]}
+
+        inner = MagicMock()
+        inner.get_remote = MagicMock()
+        inner.get_jobs.return_value = response
+
+        client = MagicMock()
+        client.client = inner
+
+        result = list_active_jobs(client)
+        assert len(result) >= 1
+        job = result[0]
+        assert job["job_id"] == "job-1"
+        assert job["dataset"] == ""
+        assert job["created"] == ""
+
+
+class TestCancelCdsRequests:
+    @patch("cdsswarm._cds_utils.http_requests")
+    def test_new_api_bulk_cancel(self, mock_http):
+        """New API uses single bulk POST to cancel multiple requests."""
+        import sys
+
+        inner = MagicMock()
+        inner.url = "https://cds.example.com"
+        inner._get_headers.return_value = {"Authorization": "Bearer token"}
+        inner.verify = True
+
+        client = MagicMock()
+        client.client = inner
+
+        mock_response = MagicMock()
+        mock_session = MagicMock()
+        mock_session.post.return_value = mock_response
+        mock_http.Session.return_value = mock_session
+
+        ecmwf_config = MagicMock()
+        ecmwf_config.SUPPORTED_API_VERSION = "v1"
+        ecmwf_ds = MagicMock()
+        ecmwf_ds.config = ecmwf_config
+        ecmwf_mod = MagicMock()
+        ecmwf_mod.datastores = ecmwf_ds
+        with patch.dict(
+            sys.modules,
+            {
+                "ecmwf": ecmwf_mod,
+                "ecmwf.datastores": ecmwf_ds,
+                "ecmwf.datastores.config": ecmwf_config,
+            },
+        ):
+            cancel_cds_requests(client, ["job-1", "job-2", "job-3"])
+
+        mock_session.post.assert_called_once()
+        call_args = mock_session.post.call_args
+        assert "/jobs/delete" in call_args[0][0]
+        assert call_args[1]["json"] == {"job_ids": ["job-1", "job-2", "job-3"]}
+
+    def test_old_api_cancels_one_by_one(self):
+        """Old API cancels each request individually via DELETE."""
+        import sys
+
+        client = MagicMock(spec=["url", "session", "verify"])
+        client.url = "https://cds.example.com/api/v2"
+        client.verify = True
+        mock_response = MagicMock()
+        client.session.delete.return_value = mock_response
+
+        with patch.dict(
+            sys.modules,
+            {
+                "ecmwf": None,
+                "ecmwf.datastores": None,
+                "ecmwf.datastores.config": None,
+            },
+        ):
+            cancel_cds_requests(client, ["task-1", "task-2"])
+
+        assert client.session.delete.call_count == 2
+        calls = client.session.delete.call_args_list
+        assert "task-1" in calls[0][0][0]
+        assert "task-2" in calls[1][0][0]
 
 
 class TestCancelImportError:

@@ -1246,3 +1246,315 @@ class TestSessionResume:
         # State file should have both tasks
         loaded = SessionState.load(sp)
         assert len(loaded.tasks) == 2
+
+
+class TestCancelParserAndHelp:
+    """Tests for cdsswarm cancel argument parsing."""
+
+    def test_cancel_parser_defaults(self):
+        from cdsswarm.cli import _build_cancel_parser
+
+        parser = _build_cancel_parser()
+        args = parser.parse_args([])
+        assert args.request_ids == []
+        assert args.yes is False
+
+    def test_cancel_parser_with_ids(self):
+        from cdsswarm.cli import _build_cancel_parser
+
+        parser = _build_cancel_parser()
+        args = parser.parse_args(["abc-123", "def-456"])
+        assert args.request_ids == ["abc-123", "def-456"]
+
+    def test_cancel_parser_yes_flag(self):
+        from cdsswarm.cli import _build_cancel_parser
+
+        parser = _build_cancel_parser()
+        args = parser.parse_args(["-y"])
+        assert args.yes is True
+        args = parser.parse_args(["--yes"])
+        assert args.yes is True
+
+    def test_cancel_help(self):
+        """cdsswarm cancel --help exits 0."""
+        with pytest.raises(SystemExit, match="0"):
+            main(["cancel", "--help"])
+
+
+class TestCmdCancelSpecificIds:
+    """Tests for cdsswarm cancel <id1> <id2> ..."""
+
+    def test_cancel_specific_ids_with_yes(self, capsys):
+        """Cancel specific IDs with --yes skips prompt."""
+        mock_client = MagicMock()
+
+        with (
+            patch("cdsapi.Client", return_value=mock_client),
+            patch("cdsswarm._cds_utils.cancel_cds_request") as mock_cancel,
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main(["cancel", "abc-123", "def-456", "--yes"])
+
+        assert mock_cancel.call_count == 2
+        mock_cancel.assert_any_call(mock_client, "abc-123")
+        mock_cancel.assert_any_call(mock_client, "def-456")
+
+        out = capsys.readouterr().out
+        assert "Cancelled abc-123" in out
+        assert "Cancelled def-456" in out
+        assert "2/2" in out
+
+    def test_cancel_specific_ids_confirmed(self, capsys):
+        """Cancel specific IDs with user confirmation."""
+        mock_client = MagicMock()
+
+        with (
+            patch("cdsapi.Client", return_value=mock_client),
+            patch("cdsswarm._cds_utils.cancel_cds_request"),
+            patch("builtins.input", return_value="y"),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main(["cancel", "abc-123"])
+
+        out = capsys.readouterr().out
+        assert "abc-123" in out
+
+    def test_cancel_specific_ids_denied(self, capsys):
+        """Declining confirmation aborts cancellation."""
+        with (
+            patch("cdsapi.Client", return_value=MagicMock()),
+            patch("cdsswarm._cds_utils.cancel_cds_request") as mock_cancel,
+            patch("builtins.input", return_value="n"),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main(["cancel", "abc-123"])
+
+        mock_cancel.assert_not_called()
+        out = capsys.readouterr().out
+        assert "Aborted" in out
+
+    def test_cancel_specific_ids_eof(self, capsys):
+        """EOFError on confirmation prompt aborts."""
+        with (
+            patch("cdsapi.Client", return_value=MagicMock()),
+            patch("builtins.input", side_effect=EOFError),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            main(["cancel", "abc-123"])
+
+        out = capsys.readouterr().out
+        assert "Aborted" in out
+
+    def test_cancel_specific_ids_keyboard_interrupt(self, capsys):
+        """KeyboardInterrupt on confirmation prompt aborts."""
+        with (
+            patch("cdsapi.Client", return_value=MagicMock()),
+            patch("builtins.input", side_effect=KeyboardInterrupt),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            main(["cancel", "abc-123"])
+
+        out = capsys.readouterr().out
+        assert "Aborted" in out
+
+    def test_cancel_partial_failure(self, capsys):
+        """One failed cancellation reports partial success and exits 1."""
+        mock_client = MagicMock()
+
+        def side_effect(client, rid):
+            if rid == "bad-id":
+                raise RuntimeError("not found")
+
+        with (
+            patch("cdsapi.Client", return_value=mock_client),
+            patch("cdsswarm._cds_utils.cancel_cds_request", side_effect=side_effect),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            main(["cancel", "good-id", "bad-id", "--yes"])
+
+        out = capsys.readouterr().out
+        assert "1/2" in out
+
+
+class TestCmdCancelAllJobs:
+    """Tests for cdsswarm cancel (no IDs, list all active)."""
+
+    def test_old_api_no_ids_errors(self, capsys):
+        """Old API client without IDs prints error."""
+        mock_client = MagicMock(spec=["url", "session", "verify"])
+
+        with (
+            patch("cdsapi.Client", return_value=mock_client),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            main(["cancel"])
+
+        err = capsys.readouterr().err
+        assert "ecmwf-datastores" in err
+        assert "cdsswarm cancel <id1>" in err
+
+    def test_no_active_jobs(self, capsys):
+        """No active jobs prints message and exits 0."""
+        inner = MagicMock()
+        inner.get_remote = MagicMock()
+        mock_client = MagicMock()
+        mock_client.client = inner
+
+        with (
+            patch("cdsapi.Client", return_value=mock_client),
+            patch("cdsswarm._cds_utils.list_active_jobs", return_value=[]),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main(["cancel"])
+
+        out = capsys.readouterr().out
+        assert "No active requests found" in out
+
+    def test_cancel_all_confirmed(self, capsys):
+        """Cancel all active jobs after user confirmation."""
+        inner = MagicMock()
+        inner.get_remote = MagicMock()
+        mock_client = MagicMock()
+        mock_client.client = inner
+
+        jobs = [
+            {
+                "job_id": "job-1",
+                "status": "accepted",
+                "dataset": "era5",
+                "created": "2024-01-01",
+            },
+            {
+                "job_id": "job-2",
+                "status": "running",
+                "dataset": "era5",
+                "created": "2024-01-02",
+            },
+        ]
+
+        with (
+            patch("cdsapi.Client", return_value=mock_client),
+            patch("cdsswarm._cds_utils.list_active_jobs", return_value=jobs),
+            patch("cdsswarm._cds_utils.cancel_cds_requests") as mock_bulk,
+            patch("builtins.input", return_value="y"),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main(["cancel"])
+
+        mock_bulk.assert_called_once_with(mock_client, ["job-1", "job-2"])
+        out = capsys.readouterr().out
+        assert "2 active request(s)" in out
+        assert "job-1" in out
+        assert "job-2" in out
+        assert "Cancelled 2" in out
+
+    def test_cancel_all_with_yes(self, capsys):
+        """--yes skips confirmation when cancelling all."""
+        inner = MagicMock()
+        inner.get_remote = MagicMock()
+        mock_client = MagicMock()
+        mock_client.client = inner
+
+        jobs = [
+            {"job_id": "job-1", "status": "running", "dataset": "ds", "created": ""},
+        ]
+
+        with (
+            patch("cdsapi.Client", return_value=mock_client),
+            patch("cdsswarm._cds_utils.list_active_jobs", return_value=jobs),
+            patch("cdsswarm._cds_utils.cancel_cds_requests") as mock_bulk,
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main(["cancel", "--yes"])
+
+        mock_bulk.assert_called_once_with(mock_client, ["job-1"])
+
+    def test_cancel_all_denied(self, capsys):
+        """Declining cancellation of all jobs aborts."""
+        inner = MagicMock()
+        inner.get_remote = MagicMock()
+        mock_client = MagicMock()
+        mock_client.client = inner
+
+        jobs = [
+            {"job_id": "job-1", "status": "running", "dataset": "ds", "created": ""},
+        ]
+
+        with (
+            patch("cdsapi.Client", return_value=mock_client),
+            patch("cdsswarm._cds_utils.list_active_jobs", return_value=jobs),
+            patch("cdsswarm._cds_utils.cancel_cds_requests") as mock_bulk,
+            patch("builtins.input", return_value="n"),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main(["cancel"])
+
+        mock_bulk.assert_not_called()
+        out = capsys.readouterr().out
+        assert "Aborted" in out
+
+    def test_cancel_all_eof(self, capsys):
+        """EOFError on cancel-all prompt aborts."""
+        inner = MagicMock()
+        inner.get_remote = MagicMock()
+        mock_client = MagicMock()
+        mock_client.client = inner
+
+        jobs = [
+            {"job_id": "job-1", "status": "running", "dataset": "ds", "created": ""},
+        ]
+
+        with (
+            patch("cdsapi.Client", return_value=mock_client),
+            patch("cdsswarm._cds_utils.list_active_jobs", return_value=jobs),
+            patch("builtins.input", side_effect=EOFError),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            main(["cancel"])
+
+        out = capsys.readouterr().out
+        assert "Aborted" in out
+
+    def test_cancel_all_keyboard_interrupt(self, capsys):
+        """KeyboardInterrupt on cancel-all prompt aborts."""
+        inner = MagicMock()
+        inner.get_remote = MagicMock()
+        mock_client = MagicMock()
+        mock_client.client = inner
+
+        jobs = [
+            {"job_id": "job-1", "status": "running", "dataset": "ds", "created": ""},
+        ]
+
+        with (
+            patch("cdsapi.Client", return_value=mock_client),
+            patch("cdsswarm._cds_utils.list_active_jobs", return_value=jobs),
+            patch("builtins.input", side_effect=KeyboardInterrupt),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            main(["cancel"])
+
+    def test_cancel_all_api_error(self, capsys):
+        """Bulk cancel API error reports failure and exits 1."""
+        inner = MagicMock()
+        inner.get_remote = MagicMock()
+        mock_client = MagicMock()
+        mock_client.client = inner
+
+        jobs = [
+            {"job_id": "job-1", "status": "running", "dataset": "ds", "created": ""},
+        ]
+
+        with (
+            patch("cdsapi.Client", return_value=mock_client),
+            patch("cdsswarm._cds_utils.list_active_jobs", return_value=jobs),
+            patch(
+                "cdsswarm._cds_utils.cancel_cds_requests",
+                side_effect=RuntimeError("server error"),
+            ),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            main(["cancel", "--yes"])
+
+        err = capsys.readouterr().err
+        assert "server error" in err

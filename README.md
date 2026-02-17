@@ -3,6 +3,7 @@
 [![CI](https://github.com/bgiebl/cdsswarm/actions/workflows/ci.yml/badge.svg)](https://github.com/bgiebl/cdsswarm/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/bgiebl/cdsswarm/branch/main/graph/badge.svg)](https://codecov.io/gh/bgiebl/cdsswarm)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/cdsswarm?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/cdsswarm)
 
 Concurrent [CDS API](https://cds.climate.copernicus.eu/) downloader with an interactive Textual TUI and script mode.
 
@@ -209,6 +210,23 @@ This generates 2 &times; 2 &times; 3 = 12 separate tasks, one for each combinati
 | `--split-by FIELDS` | Override the template's `split_by` (comma-separated) |
 | `-o`, `--output FILE` | Output file path (default: stdout) |
 | `--dry-run` | Show task count and target filenames without writing output |
+
+### Cancelling requests
+
+The `cancel` subcommand cancels active CDS API requests on the server — useful for cleaning up after a crashed session or accidental submissions:
+
+```bash
+cdsswarm cancel                        # cancel all queued/running requests (new API only)
+cdsswarm cancel abc-123 def-456        # cancel specific request IDs (both APIs)
+cdsswarm cancel --yes                  # skip confirmation prompt
+```
+
+When no IDs are given, cdsswarm queries the CDS server for all active (accepted/running) requests and presents them for confirmation before cancelling. This requires the new CADS API (`ecmwf-datastores`). With the old `cdsapi`, you must provide specific request IDs.
+
+| Option | Description |
+|---|---|
+| `request_ids` | Specific request IDs to cancel (omit to cancel all active) |
+| `-y`, `--yes` | Skip confirmation prompt |
 
 ### Session resume
 

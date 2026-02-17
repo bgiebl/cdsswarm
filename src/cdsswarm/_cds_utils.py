@@ -202,6 +202,73 @@ def cancel_cds_request(client, request_id: str):
         resp.raise_for_status()
 
 
+def list_active_jobs(client, limit=200) -> list[dict]:
+    """List active CDS jobs (accepted + running).
+
+    Returns list of dicts with keys: job_id, status, dataset, created.
+    Only works with new ecmwf.datastores client; returns [] for old cdsapi.
+    """
+    inner = getattr(client, "client", None)
+    if inner is None or not hasattr(inner, "get_remote"):
+        return []
+
+    jobs = []
+    for status in ("accepted", "running"):
+        try:
+            response = inner.get_jobs(
+                status=status,
+                sortby="-created",
+                limit=limit,
+            )
+        except Exception as exc:
+            log.debug("get_jobs(status=%s) failed: %s", status, exc)
+            continue
+        for job in response._json_dict.get("jobs", []):
+            job_id = job.get("jobID")
+            if not job_id:
+                continue
+            jobs.append(
+                {
+                    "job_id": job_id,
+                    "status": job.get("status", status),
+                    "dataset": job.get("processID", ""),
+                    "created": job.get("created", ""),
+                }
+            )
+    return jobs
+
+
+def cancel_cds_requests(client, request_ids: list[str]):
+    """Cancel multiple CDS requests in one API call (new API) or one-by-one (old API)."""
+    try:
+        from ecmwf.datastores import config as ds_config
+    except ImportError:
+        ds_config = None
+
+    inner = getattr(client, "client", None)
+    if inner is not None and hasattr(inner, "_get_headers") and ds_config is not None:
+        api_version = getattr(ds_config, "SUPPORTED_API_VERSION", "v1")
+        url = f"{inner.url}/retrieve/{api_version}/jobs/delete"
+        sess = http_requests.Session()
+        resp = sess.post(
+            url,
+            json={"job_ids": request_ids},
+            headers=inner._get_headers(),
+            verify=inner.verify,
+            timeout=10,
+        )
+        resp.raise_for_status()
+    else:
+        for rid in request_ids:
+            task_url = f"{client.url}/tasks/{rid}"
+            resp = client.session.delete(
+                task_url,
+                verify=client.verify,
+                timeout=10,
+            )
+            resp.raise_for_status()
+
+
 def install_progress_router(adapter, worker_id_map, id_lock):
     """Monkey-patch tqdm so cdsapi download progress goes through our adapter.
 

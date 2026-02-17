@@ -293,7 +293,10 @@ class TextualAdapter(OutputAdapter):
 
     def _post(self, message):
         """Post a Textual Message from a worker thread."""
-        self._app.call_from_thread(self._app.post_message, message)
+        try:
+            self._app.call_from_thread(self._app.post_message, message)
+        except RuntimeError:
+            pass  # App already shut down
 
     def on_tasks_initialized(self, tasks, skipped_targets):
         from .textual_app import TasksInitialized

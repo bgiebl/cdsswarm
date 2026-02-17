@@ -878,3 +878,10 @@ class TestTextualAdapter:
         assert len(msgs) == 1
         assert isinstance(msgs[0], GlobalMessage)
         assert msgs[0].message == "All downloads completed"
+
+    def test_post_ignores_runtime_error_when_app_stopped(self):
+        """_post silently ignores RuntimeError when the app is no longer running."""
+        adapter, app = self._make_adapter()
+        app.call_from_thread.side_effect = RuntimeError("App is not running")
+        # Should not raise
+        adapter.on_global_message("message after shutdown")

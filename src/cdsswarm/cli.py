@@ -189,6 +189,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cdsswarm",
         description="Concurrent CDS API downloader with TUI",
+        epilog=(
+            "subcommands:\n"
+            "  generate   Expand a template into a request file\n"
+            "  cancel     Cancel active CDS API requests\n"
+            "\n"
+            "Run 'cdsswarm <subcommand> --help' for subcommand usage."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--version",
@@ -370,13 +378,127 @@ def _cmd_generate(argv: list[str]) -> None:
     sys.exit(0)
 
 
+def _build_cancel_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for ``cdsswarm cancel``."""
+    parser = argparse.ArgumentParser(
+        prog="cdsswarm cancel",
+        description="Cancel active CDS API requests",
+    )
+    parser.add_argument(
+        "request_ids",
+        nargs="*",
+        help="Specific request IDs to cancel (omit to cancel all active)",
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip confirmation prompt",
+    )
+    return parser
+
+
+def _cmd_cancel(argv: list[str]) -> None:
+    """Handle ``cdsswarm cancel ...``."""
+    import cdsapi
+
+    from ._cds_utils import (
+        cancel_cds_request,
+        cancel_cds_requests,
+        list_active_jobs,
+    )
+
+    parser = _build_cancel_parser()
+    args = parser.parse_args(argv)
+
+    client = cdsapi.Client(quiet=True, progress=False)
+
+    if args.request_ids:
+        # Cancel specific IDs directly
+        ids_to_cancel = args.request_ids
+        if not args.yes:
+            print(f"Will cancel {len(ids_to_cancel)} request(s):\n")
+            for rid in ids_to_cancel:
+                print(f"  {rid}")
+            print()
+            try:
+                answer = input("Proceed? [y/N] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\nAborted.")
+                sys.exit(1)
+            if answer not in ("y", "yes"):
+                print("Aborted.")
+                sys.exit(0)
+
+        failed = 0
+        for rid in ids_to_cancel:
+            try:
+                cancel_cds_request(client, rid)
+                print(f"  Cancelled {rid}")
+            except Exception as exc:
+                print(f"  Failed to cancel {rid}: {exc}", file=sys.stderr)
+                failed += 1
+
+        total = len(ids_to_cancel)
+        print(f"\n{total - failed}/{total} request(s) cancelled.")
+        sys.exit(1 if failed else 0)
+
+    # No specific IDs — list and cancel all active jobs
+    inner = getattr(client, "client", None)
+    if inner is None or not hasattr(inner, "get_remote"):
+        print(
+            "Error: listing active requests requires the new CADS API "
+            "(ecmwf-datastores).\n"
+            "Provide specific request IDs instead: cdsswarm cancel <id1> <id2> ...",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    jobs = list_active_jobs(client)
+    if not jobs:
+        print("No active requests found.")
+        sys.exit(0)
+
+    print(f"Found {len(jobs)} active request(s):\n")
+    print(f"  {'Request ID':<40} {'Dataset':<35} {'Status':<12} {'Created'}")
+    print(f"  {'-' * 40} {'-' * 35} {'-' * 12} {'-' * 20}")
+    for job in jobs:
+        print(
+            f"  {job['job_id']:<40} {job['dataset']:<35} "
+            f"{job['status']:<12} {job['created']}"
+        )
+    print()
+
+    if not args.yes:
+        try:
+            answer = input("Cancel all? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nAborted.")
+            sys.exit(1)
+        if answer not in ("y", "yes"):
+            print("Aborted.")
+            sys.exit(0)
+
+    ids_to_cancel = [job["job_id"] for job in jobs]
+    try:
+        cancel_cds_requests(client, ids_to_cancel)
+        print(f"Cancelled {len(ids_to_cancel)} request(s).")
+    except Exception as exc:
+        print(f"Error cancelling requests: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    sys.exit(0)
+
+
 def main(argv: list[str] | None = None):
     if argv is None:
         argv = sys.argv[1:]
 
-    # Dispatch to generate subcommand before regular parsing.
+    # Dispatch to subcommands before regular parsing.
     if argv and argv[0] == "generate":
         return _cmd_generate(argv[1:])
+    if argv and argv[0] == "cancel":
+        return _cmd_cancel(argv[1:])
 
     parser = _build_parser()
     args = parser.parse_args(argv)
