@@ -696,3 +696,163 @@ class TestRunInteractive:
             lazy.cancel()  # Should delegate to _real.cancel()
 
             mock_sd_instance.cancel.assert_called_once()
+
+
+class TestMainArgvDefault:
+    def test_main_uses_sysargv_when_none(self, tmp_dir, capsys):
+        """main() falls back to sys.argv[1:] when argv is None."""
+        requests_file = os.path.join(tmp_dir, "requests.json")
+        with open(requests_file, "w") as f:
+            json.dump([{"dataset": "ds", "request": {}, "target": "out.grib"}], f)
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch("cdsswarm.cli.sys.argv", ["cdsswarm", requests_file, "--dry-run"]),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main(None)
+
+
+class TestCmdGenerate:
+    """CLI integration tests for ``cdsswarm generate``."""
+
+    def _write_template(self, tmp_dir, data, name="template.json"):
+        path = os.path.join(tmp_dir, name)
+        with open(path, "w") as f:
+            json.dump(data, f)
+        return path
+
+    def _template(self):
+        return {
+            "dataset": "reanalysis-era5-single-levels",
+            "request": {
+                "variable": ["2m_temperature", "total_precipitation"],
+                "year": ["2023", "2024"],
+                "day": ["01"],
+                "time": ["12:00"],
+            },
+            "target": "output/{variable}_{year}.grib",
+            "split_by": ["variable", "year"],
+        }
+
+    def test_generate_stdout(self, tmp_dir, capsys):
+        path = self._write_template(tmp_dir, self._template())
+
+        with pytest.raises(SystemExit, match="0"):
+            main(["generate", path])
+
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert data["dataset"] == "reanalysis-era5-single-levels"
+        assert len(data["requests"]) == 4  # 2 vars x 2 years
+
+    def test_generate_output_file(self, tmp_dir, capsys):
+        path = self._write_template(tmp_dir, self._template())
+        out_path = os.path.join(tmp_dir, "requests.json")
+
+        with pytest.raises(SystemExit, match="0"):
+            main(["generate", path, "-o", out_path])
+
+        assert os.path.isfile(out_path)
+        with open(out_path) as f:
+            data = json.load(f)
+        assert len(data["requests"]) == 4
+
+        err = capsys.readouterr().err
+        assert "4 task(s)" in err
+
+    def test_generate_split_by_override(self, tmp_dir, capsys):
+        template = self._template()
+        template["target"] = "output/{year}.grib"
+        path = self._write_template(tmp_dir, template)
+
+        with pytest.raises(SystemExit, match="0"):
+            main(["generate", path, "--split-by", "year"])
+
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert len(data["requests"]) == 2  # only year split
+
+    def test_generate_dry_run(self, tmp_dir, capsys):
+        path = self._write_template(tmp_dir, self._template())
+
+        with pytest.raises(SystemExit, match="0"):
+            main(["generate", path, "--dry-run"])
+
+        out = capsys.readouterr().out
+        assert "4 task(s)" in out
+        assert "output/2m_temperature_2023.grib" in out
+
+    def test_generate_file_not_found(self, capsys):
+        with pytest.raises(SystemExit, match="1"):
+            main(["generate", "/nonexistent_template.json"])
+
+        err = capsys.readouterr().err
+        assert "file not found" in err.lower()
+
+    def test_generate_invalid_template(self, tmp_dir, capsys):
+        path = self._write_template(tmp_dir, {"foo": "bar"})
+
+        with pytest.raises(SystemExit, match="1"):
+            main(["generate", path])
+
+        err = capsys.readouterr().err
+        assert "Error" in err
+
+    def test_existing_dry_run_still_works(self, tmp_dir, capsys):
+        """Existing ``cdsswarm requests.json --dry-run`` still works."""
+        requests_file = os.path.join(tmp_dir, "requests.json")
+        with open(requests_file, "w") as f:
+            json.dump([{"dataset": "ds", "request": {}, "target": "out.grib"}], f)
+
+        cfg_patches = _patch_config(tmp_dir)
+        with cfg_patches[0], cfg_patches[1], pytest.raises(SystemExit, match="0"):
+            main([requests_file, "--dry-run"])
+
+        out = capsys.readouterr().out
+        assert "1 task(s) total" in out
+
+    def test_generate_yaml_template(self, tmp_dir, capsys):
+        pytest.importorskip("yaml")
+        import yaml
+
+        template = self._template()
+        path = os.path.join(tmp_dir, "template.yaml")
+        with open(path, "w") as f:
+            yaml.dump(template, f)
+
+        with pytest.raises(SystemExit, match="0"):
+            main(["generate", path])
+
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert len(data["requests"]) == 4
+
+    def test_generate_yaml_import_error(self, tmp_dir, capsys):
+        """YAML template raises ImportError when PyYAML is not installed."""
+        import sys as _sys
+
+        path = os.path.join(tmp_dir, "template.yaml")
+        with open(path, "w") as f:
+            f.write("dataset: ds\n")
+
+        with patch.dict(_sys.modules, {"yaml": None}):
+            with pytest.raises(SystemExit, match="1"):
+                main(["generate", path])
+
+        err = capsys.readouterr().err
+        assert "PyYAML is required" in err
+
+    def test_generate_invalid_json(self, tmp_dir, capsys):
+        """Malformed JSON template reports error."""
+        path = os.path.join(tmp_dir, "bad.json")
+        with open(path, "w") as f:
+            f.write("{not valid json")
+
+        with pytest.raises(SystemExit, match="1"):
+            main(["generate", path])
+
+        err = capsys.readouterr().err
+        assert "Error" in err

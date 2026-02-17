@@ -10,6 +10,7 @@ import time
 
 from .adapters import LoggingAdapter, PlainTextAdapter, TextualAdapter
 from .core import SwarmDownloader, Task
+from .exceptions import RequestFileError
 from .summary import export_summary, print_summary
 
 
@@ -241,7 +242,109 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _load_template(path: str) -> dict:
+    """Load a generate template from a JSON or YAML file."""
+    with open(path) as f:
+        if path.endswith((".yaml", ".yml")):
+            try:
+                import yaml
+            except ImportError:
+                raise ImportError(
+                    "PyYAML is required for YAML files. "
+                    "Install it with: pip install cdsswarm[yaml]"
+                )
+            return yaml.safe_load(f)
+        else:
+            return json.load(f)
+
+
+def _build_generate_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for ``cdsswarm generate``."""
+    parser = argparse.ArgumentParser(
+        prog="cdsswarm generate",
+        description="Expand a template into a request file",
+    )
+    parser.add_argument(
+        "template_file",
+        help="Path to template JSON/YAML file",
+    )
+    parser.add_argument(
+        "--split-by",
+        default=None,
+        help="Comma-separated split fields (overrides template's split_by)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        default=None,
+        metavar="FILE",
+        help="Output file path (default: stdout)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show task count and targets without writing output",
+    )
+    return parser
+
+
+def _cmd_generate(argv: list[str]) -> None:
+    """Handle ``cdsswarm generate ...``."""
+    from .generate import expand_template
+
+    parser = _build_generate_parser()
+    args = parser.parse_args(argv)
+
+    if not os.path.isfile(args.template_file):
+        print(f"Error: file not found: {args.template_file}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        template = _load_template(args.template_file)
+    except (ImportError, ValueError, json.JSONDecodeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    split_by = None
+    if args.split_by is not None:
+        split_by = [s.strip() for s in args.split_by.split(",")]
+
+    try:
+        result = expand_template(template, split_by=split_by)
+    except RequestFileError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.dry_run:
+        requests = result["requests"]
+        print(f"{len(requests)} task(s) would be generated:\n")
+        for r in requests:
+            print(f"  {r['target']}")
+        sys.exit(0)
+
+    output_json = json.dumps(result, indent=2)
+
+    if args.output:
+        with open(args.output, "w") as f:
+            f.write(output_json + "\n")
+        print(
+            f"Wrote {len(result['requests'])} task(s) to {args.output}",
+            file=sys.stderr,
+        )
+    else:
+        print(output_json)
+
+    sys.exit(0)
+
+
 def main(argv: list[str] | None = None):
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # Dispatch to generate subcommand before regular parsing.
+    if argv and argv[0] == "generate":
+        return _cmd_generate(argv[1:])
+
     parser = _build_parser()
     args = parser.parse_args(argv)
 
