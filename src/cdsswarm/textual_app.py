@@ -23,6 +23,8 @@ from textual.widgets import (
     Static,
 )
 
+from .status import FileStatus, WorkerStatus
+
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
@@ -64,7 +66,7 @@ def format_size(nbytes: int) -> str:
 class WorkerData:
     """All mutable state for one download worker."""
 
-    cds_status: str = "idle"
+    cds_status: WorkerStatus = WorkerStatus.IDLE
     filename: str = ""
     request_id: str = ""
     start_time: float | None = None
@@ -86,7 +88,7 @@ class WorkerData:
 
     def reset(self):
         """Reset state for reuse when worker picks up a new task."""
-        self.cds_status = "idle"
+        self.cds_status = WorkerStatus.IDLE
         self.filename = ""
         self.request_id = ""
         self.start_time = None
@@ -120,7 +122,7 @@ class FileData:
     dataset: str
     label: str
     request: dict
-    status: str = "pending"  # pending, cached, active, successful, failed
+    status: FileStatus = FileStatus.PENDING
     worker_id: int | None = None
     error: str = ""
     dl_bytes: int = 0
@@ -152,7 +154,7 @@ class WorkerMessage(Message):
 
 
 class WorkerCdsStatus(Message):
-    def __init__(self, worker_id: int, cds_status: str) -> None:
+    def __init__(self, worker_id: int, cds_status: WorkerStatus) -> None:
         super().__init__()
         self.worker_id = worker_id
         self.cds_status = cds_status
@@ -295,19 +297,19 @@ class ShowChecksumDialog(Message):
 # ---------------------------------------------------------------------------
 
 STATUS_STYLES = {
-    "idle": "dim",
-    "accepted": "bold orange1",
-    "running": "bold yellow",
-    "successful": "bold green",
-    "failed": "bold red",
-    "cancelled": "bold magenta",
+    WorkerStatus.IDLE: "dim",
+    WorkerStatus.ACCEPTED: "bold orange1",
+    WorkerStatus.RUNNING: "bold yellow",
+    WorkerStatus.SUCCESSFUL: "bold green",
+    WorkerStatus.FAILED: "bold red",
+    WorkerStatus.CANCELLED: "bold magenta",
 }
 
 
-def styled_status(status: str) -> Text:
+def styled_status(status: WorkerStatus | FileStatus) -> Text:
     """Return a Rich Text with colored status badge."""
     style = STATUS_STYLES.get(status, "")
-    return Text(status, style=style)
+    return Text(status.value, style=style)
 
 
 # ---------------------------------------------------------------------------
@@ -395,13 +397,13 @@ class FilesInfoPanel(Static):
         num_files = len(files)
 
         # Summary counts
-        counts: dict[str, int] = {}
+        counts: dict[FileStatus, int] = {}
         for fd in files:
             counts[fd.status] = counts.get(fd.status, 0) + 1
         parts = []
-        for key in ["cached", "pending", "active", "successful", "failed"]:
+        for key in FileStatus:
             if counts.get(key, 0) > 0:
-                parts.append(f"{counts[key]} {key}")
+                parts.append(f"{counts[key]} {key.value}")
         summary = " | ".join(parts) if parts else "\u2014"
 
         worker_info = f"Worker: {f.worker_id}" if f.worker_id is not None else ""
@@ -914,7 +916,7 @@ class CdsswarmApp(App):
         for i in range(self.num_workers):
             wt.add_row(
                 str(i),
-                styled_status("idle"),
+                styled_status(WorkerStatus.IDLE),
                 "---",
                 "\u2014",
                 "\u2014",
@@ -962,7 +964,7 @@ class CdsswarmApp(App):
 
     def on_worker_started(self, msg: WorkerStarted) -> None:
         w = self.worker_data[msg.worker_id]
-        w.cds_status = "accepted"
+        w.cds_status = WorkerStatus.ACCEPTED
         w.filename = msg.filename
         w.dataset = msg.dataset
         w.request_params = msg.request
@@ -984,7 +986,9 @@ class CdsswarmApp(App):
         w.logs.append(f"Started: {msg.filename}")
 
         wt = self.query_one("#worker-table", DataTable)
-        wt.update_cell(str(msg.worker_id), "Status", styled_status("accepted"))
+        wt.update_cell(
+            str(msg.worker_id), "Status", styled_status(WorkerStatus.ACCEPTED)
+        )
         wt.update_cell(str(msg.worker_id), "Prog", "---")
         wt.update_cell(str(msg.worker_id), "Filename", msg.filename)
         wt.update_cell(
@@ -1004,7 +1008,7 @@ class CdsswarmApp(App):
 
     def on_worker_cds_status(self, msg: WorkerCdsStatus) -> None:
         w = self.worker_data[msg.worker_id]
-        if w.cds_status == "cancelled":
+        if w.cds_status is WorkerStatus.CANCELLED:
             return
         w.cds_status = msg.cds_status
         wt = self.query_one("#worker-table", DataTable)
@@ -1109,7 +1113,11 @@ class CdsswarmApp(App):
         ft = self.query_one("#files-table", DataTable)
         ft.clear()
         for i, task in enumerate(msg.tasks):
-            status = "cached" if task.target in msg.skipped_targets else "pending"
+            status = (
+                FileStatus.CACHED
+                if task.target in msg.skipped_targets
+                else FileStatus.PENDING
+            )
             fd = FileData(
                 target=task.target,
                 dataset=task.dataset,
@@ -1122,8 +1130,8 @@ class CdsswarmApp(App):
             ft.add_row(
                 str(i),
                 styled_status(status)
-                if status == "cached"
-                else Text(status, style="dim"),
+                if status is FileStatus.CACHED
+                else Text(status.value, style="dim"),
                 task.label,
                 task.dataset,
                 "\u2014",
@@ -1142,7 +1150,7 @@ class CdsswarmApp(App):
     def on_file_active(self, msg: FileActive) -> None:
         if msg.target in self.file_index:
             idx = self.file_index[msg.target]
-            self.files[idx].status = "active"
+            self.files[idx].status = FileStatus.ACTIVE
             self.files[idx].worker_id = msg.worker_id
             self.worker_to_target[msg.worker_id] = msg.target
             self._update_file_row(idx)
@@ -1152,7 +1160,7 @@ class CdsswarmApp(App):
         if msg.target in self.file_index:
             idx = self.file_index[msg.target]
             f = self.files[idx]
-            f.status = "successful" if msg.success else "failed"
+            f.status = FileStatus.SUCCESSFUL if msg.success else FileStatus.FAILED
             f.error = msg.error
             # Snapshot dl data from worker
             if f.worker_id is not None and 0 <= f.worker_id < self.num_workers:
@@ -1165,13 +1173,13 @@ class CdsswarmApp(App):
 
     def on_worker_cancelled(self, msg: WorkerCancelled) -> None:
         w = self.worker_data[msg.worker_id]
-        w.cds_status = "cancelled"
+        w.cds_status = WorkerStatus.CANCELLED
         w.logs.append("Request cancelled")
         wt = self.query_one("#worker-table", DataTable)
         wt.update_cell(
             str(msg.worker_id),
             "Status",
-            styled_status("cancelled"),
+            styled_status(WorkerStatus.CANCELLED),
         )
 
     def on_show_checksum_dialog(self, msg: ShowChecksumDialog) -> None:
@@ -1292,7 +1300,7 @@ class CdsswarmApp(App):
         if f.dl_total > 0:
             ft.update_cell(str(idx), "Size", format_size(f.dl_total))
             pct = int(f.dl_bytes * 100 / f.dl_total)
-            if f.status == "successful":
+            if f.status is FileStatus.SUCCESSFUL:
                 ft.update_cell(str(idx), "DL %", Text(f"{pct}% \u2713", style="green"))
             else:
                 ft.update_cell(str(idx), "DL %", f"{pct}%")

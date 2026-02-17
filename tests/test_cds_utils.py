@@ -10,26 +10,33 @@ from cdsswarm._cds_utils import (
     parse_request_id,
     uninstall_progress_router,
 )
+from cdsswarm.status import WorkerStatus
 
 
 class TestParseCdsStatus:
     def test_old_api_queued(self):
-        assert parse_cds_status("Request is queued") == "accepted"
+        assert parse_cds_status("Request is queued") is WorkerStatus.ACCEPTED
 
     def test_old_api_running(self):
-        assert parse_cds_status("Request is running") == "running"
+        assert parse_cds_status("Request is running") is WorkerStatus.RUNNING
 
     def test_old_api_completed(self):
-        assert parse_cds_status("Request is completed") == "successful"
+        assert parse_cds_status("Request is completed") is WorkerStatus.SUCCESSFUL
 
     def test_old_api_failed(self):
-        assert parse_cds_status("Request is failed") == "failed"
+        assert parse_cds_status("Request is failed") is WorkerStatus.FAILED
 
     def test_new_api_accepted(self):
-        assert parse_cds_status("status has been updated to accepted") == "accepted"
+        assert (
+            parse_cds_status("status has been updated to accepted")
+            is WorkerStatus.ACCEPTED
+        )
 
     def test_new_api_successful(self):
-        assert parse_cds_status("status has been updated to successful") == "successful"
+        assert (
+            parse_cds_status("status has been updated to successful")
+            is WorkerStatus.SUCCESSFUL
+        )
 
     def test_no_match(self):
         assert parse_cds_status("some random message") is None

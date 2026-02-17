@@ -14,6 +14,7 @@ import uuid
 from textual import work
 
 from cdsswarm.core import Task
+from cdsswarm.status import WorkerStatus
 from cdsswarm.textual_app import (
     CdsswarmApp,
     FileActive,
@@ -217,7 +218,7 @@ class DemoApp(CdsswarmApp):
             fname, size, rid, dataset, params, labels, target = task_queue[task_idx]
             task_idx += 1
             _post(WorkerStarted(wid, fname, dataset, params, target))
-            _post(WorkerCdsStatus(wid, "accepted"))
+            _post(WorkerCdsStatus(wid, WorkerStatus.ACCEPTED))
             _post(WorkerRequestId(wid, rid))
             _post(WorkerDatasetTitle(wid, DATASET_TITLES.get(dataset, "")))
             _post(WorkerRequestLabels(wid, labels))
@@ -265,7 +266,7 @@ class DemoApp(CdsswarmApp):
                 if phase == 0 and state["phase_ticks"] >= random.randint(5, 15):
                     state["phase"] = 1
                     state["phase_ticks"] = 0
-                    _post(WorkerCdsStatus(wid, "running"))
+                    _post(WorkerCdsStatus(wid, WorkerStatus.RUNNING))
                     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                     _post(
                         WorkerServerTimestamps(
@@ -285,7 +286,7 @@ class DemoApp(CdsswarmApp):
                     if state["server_progress"] >= 100:
                         state["phase"] = 2
                         state["phase_ticks"] = 0
-                        _post(WorkerCdsStatus(wid, "successful"))
+                        _post(WorkerCdsStatus(wid, WorkerStatus.SUCCESSFUL))
                         _post(WorkerServerProgress(wid, 100))
                         _post(WorkerFileSize(wid, state["size"]))
                         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -361,7 +362,7 @@ class DemoApp(CdsswarmApp):
                             continue
 
                         if random.random() < 0.1:
-                            _post(WorkerCdsStatus(wid, "failed"))
+                            _post(WorkerCdsStatus(wid, WorkerStatus.FAILED))
                             _post(WorkerMessage(wid, "Error: connection timeout"))
                             _post(
                                 FileCompleted(

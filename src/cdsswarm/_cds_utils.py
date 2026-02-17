@@ -8,6 +8,8 @@ import threading
 
 import requests as http_requests
 
+from .status import WorkerStatus
+
 log = logging.getLogger(__name__)
 
 # CDS API status messages:
@@ -20,13 +22,13 @@ CDS_STATUS_PATTERNS = [
 
 CDS_STATE_MAP = {
     # Old CDS API states
-    "queued": "accepted",
-    "running": "running",
-    "completed": "successful",
-    "failed": "failed",
+    "queued": WorkerStatus.ACCEPTED,
+    "running": WorkerStatus.RUNNING,
+    "completed": WorkerStatus.SUCCESSFUL,
+    "failed": WorkerStatus.FAILED,
     # New CDS API (CADS) states
-    "accepted": "accepted",
-    "successful": "successful",
+    "accepted": WorkerStatus.ACCEPTED,
+    "successful": WorkerStatus.SUCCESSFUL,
 }
 
 # Old cdsapi: "Request ID is <id>, sleep <n>" (debug_callback)
@@ -83,7 +85,11 @@ def find_reusable_jobs(client, tasks, limit=200) -> dict[str, str]:
     remaining = sum(len(v) for v in needed.values())
 
     # Query jobs: successful first (ready to download), then running, then accepted
-    for status in ("successful", "running", "accepted"):
+    for status in (
+        WorkerStatus.SUCCESSFUL,
+        WorkerStatus.RUNNING,
+        WorkerStatus.ACCEPTED,
+    ):
         if remaining <= 0:
             break
         try:
@@ -138,7 +144,7 @@ def _scan_jobs(inner, status, limit, needed_datasets, needed, reuse_map):
                 del needed[key]
 
 
-def parse_cds_status(message: str) -> str | None:
+def parse_cds_status(message: str) -> WorkerStatus | None:
     """Extract normalized CDS status from a log message."""
     for pattern in CDS_STATUS_PATTERNS:
         m = pattern.search(message)

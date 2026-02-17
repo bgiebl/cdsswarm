@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import IO, TYPE_CHECKING
 
 from ._cds_utils import parse_cds_status
+from .status import WorkerStatus
 
 if TYPE_CHECKING:
     from .core import Task
@@ -36,20 +37,20 @@ _WORKER_STYLES = [
 ]
 
 _CDS_STATUS_DESCRIPTIONS = {
-    "accepted": "request queued on CDS server",
-    "running": "server is processing request",
-    "successful": "server finished, starting download",
-    "failed": "request failed on server",
-    "cancelled": "request cancelled",
+    WorkerStatus.ACCEPTED: "request queued on CDS server",
+    WorkerStatus.RUNNING: "server is processing request",
+    WorkerStatus.SUCCESSFUL: "server finished, starting download",
+    WorkerStatus.FAILED: "request failed on server",
+    WorkerStatus.CANCELLED: "request cancelled",
 }
 
 # ANSI codes for CDS status colors (orange uses 256-color mode)
 _CDS_STATUS_COLORS = {
-    "accepted": "33",  # yellow
-    "running": "38;5;208",  # orange
-    "successful": "32",  # green
-    "failed": "31",  # red
-    "cancelled": "35",  # purple
+    WorkerStatus.ACCEPTED: "33",  # yellow
+    WorkerStatus.RUNNING: "38;5;208",  # orange
+    WorkerStatus.SUCCESSFUL: "32",  # green
+    WorkerStatus.FAILED: "31",  # red
+    WorkerStatus.CANCELLED: "35",  # purple
 }
 
 
@@ -308,10 +309,10 @@ class TextualAdapter(OutputAdapter):
         )
 
         if success:
-            self._post(WorkerCdsStatus(worker_id, "successful"))
+            self._post(WorkerCdsStatus(worker_id, WorkerStatus.SUCCESSFUL))
             self._post(WorkerMessage(worker_id, f"Completed: {task.label}"))
         else:
-            self._post(WorkerCdsStatus(worker_id, "failed"))
+            self._post(WorkerCdsStatus(worker_id, WorkerStatus.FAILED))
             self._post(WorkerMessage(worker_id, f"Error: {error}"))
         self._post(WorkerFinished(worker_id))
         self._post(FileCompleted(task.target, success, error))

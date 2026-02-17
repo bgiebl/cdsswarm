@@ -4,6 +4,7 @@ import pytest
 from textual.widgets import DataTable
 
 from cdsswarm.core import Task
+from cdsswarm.status import FileStatus, WorkerStatus
 from cdsswarm.textual_app import (
     CdsswarmApp,
     ChecksumScreen,
@@ -80,15 +81,15 @@ class TestFormatSize:
 
 class TestStyledStatus:
     def test_idle(self):
-        t = styled_status("idle")
+        t = styled_status(WorkerStatus.IDLE)
         assert t.plain == "idle"
 
     def test_running(self):
-        t = styled_status("running")
+        t = styled_status(WorkerStatus.RUNNING)
         assert t.plain == "running"
 
     def test_successful(self):
-        t = styled_status("successful")
+        t = styled_status(WorkerStatus.SUCCESSFUL)
         assert t.plain == "successful"
 
 
@@ -100,18 +101,18 @@ class TestStyledStatus:
 class TestWorkerData:
     def test_default(self):
         w = WorkerData()
-        assert w.cds_status == "idle"
+        assert w.cds_status is WorkerStatus.IDLE
         assert w.filename == ""
         assert w.start_time is None
 
     def test_reset(self):
         w = WorkerData()
-        w.cds_status = "running"
+        w.cds_status = WorkerStatus.RUNNING
         w.filename = "test.grib"
         w.start_time = 1000.0
         w.logs.append("hello")
         w.reset()
-        assert w.cds_status == "idle"
+        assert w.cds_status is WorkerStatus.IDLE
         assert w.filename == ""
         assert w.start_time is None
         assert len(w.logs) == 0
@@ -173,7 +174,7 @@ async def test_worker_cds_status_updates_table():
     """WorkerCdsStatus message updates status cell."""
     app = CdsswarmApp(num_workers=2)
     async with app.run_test() as pilot:
-        app.post_message(WorkerCdsStatus(0, "running"))
+        app.post_message(WorkerCdsStatus(0, WorkerStatus.RUNNING))
         await pilot.pause()
         wt = app.query_one("#worker-table", DataTable)
         row = wt.get_row("0")
@@ -247,7 +248,7 @@ async def test_worker_cancelled_status():
     async with app.run_test() as pilot:
         app.post_message(WorkerCancelled(0))
         await pilot.pause()
-        assert app.worker_data[0].cds_status == "cancelled"
+        assert app.worker_data[0].cds_status is WorkerStatus.CANCELLED
         wt = app.query_one("#worker-table", DataTable)
         row = wt.get_row("0")
         assert any("cancelled" in str(cell) for cell in row)
@@ -260,9 +261,9 @@ async def test_cancelled_worker_ignores_status_update():
     async with app.run_test() as pilot:
         app.post_message(WorkerCancelled(0))
         await pilot.pause()
-        app.post_message(WorkerCdsStatus(0, "running"))
+        app.post_message(WorkerCdsStatus(0, WorkerStatus.RUNNING))
         await pilot.pause()
-        assert app.worker_data[0].cds_status == "cancelled"
+        assert app.worker_data[0].cds_status is WorkerStatus.CANCELLED
 
 
 @pytest.mark.asyncio
@@ -310,9 +311,9 @@ async def test_tasks_initialized_populates_files():
         await pilot.pause()
         ft = app.query_one("#files-table", DataTable)
         assert ft.row_count == 5
-        assert app.files[0].status == "cached"
-        assert app.files[1].status == "pending"
-        assert app.files[2].status == "cached"
+        assert app.files[0].status is FileStatus.CACHED
+        assert app.files[1].status is FileStatus.PENDING
+        assert app.files[2].status is FileStatus.CACHED
 
 
 @pytest.mark.asyncio
@@ -325,7 +326,7 @@ async def test_file_active():
         await pilot.pause()
         app.post_message(FileActive(tasks[1].target, 0))
         await pilot.pause()
-        assert app.files[1].status == "active"
+        assert app.files[1].status is FileStatus.ACTIVE
         assert app.files[1].worker_id == 0
 
 
@@ -341,7 +342,7 @@ async def test_file_completed_success():
         await pilot.pause()
         app.post_message(FileCompleted(tasks[0].target, True))
         await pilot.pause()
-        assert app.files[0].status == "successful"
+        assert app.files[0].status is FileStatus.SUCCESSFUL
 
 
 @pytest.mark.asyncio
@@ -356,7 +357,7 @@ async def test_file_completed_failure():
         await pilot.pause()
         app.post_message(FileCompleted(tasks[0].target, False, "timeout"))
         await pilot.pause()
-        assert app.files[0].status == "failed"
+        assert app.files[0].status is FileStatus.FAILED
         assert app.files[0].error == "timeout"
 
 
