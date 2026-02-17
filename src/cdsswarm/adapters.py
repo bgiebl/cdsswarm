@@ -109,6 +109,12 @@ class OutputAdapter(ABC):
     def on_qos_update(self, queued: int, running: int, limit: int):
         pass
 
+    def on_task_hook_started(self, worker_id: int, command: str):
+        pass
+
+    def on_task_hook_finished(self, worker_id: int, success: bool, warning: str = ""):
+        pass
+
     def on_tasks_initialized(self, tasks: list[Task], skipped_targets: set[str]):
         pass
 
@@ -253,6 +259,22 @@ class PlainTextAdapter(OutputAdapter):
             return "continue"
         return "continue"
 
+    def on_task_hook_started(self, worker_id, command):
+        with self._lock:
+            label = self._worker_labels.get(worker_id, "")
+        prefix = f"{label}: " if label else ""
+        self._write(f"  {self._worker_tag(worker_id)} {prefix}running post-hook")
+
+    def on_task_hook_finished(self, worker_id, success, warning=""):
+        if not success:
+            with self._lock:
+                label = self._worker_labels.get(worker_id, "")
+            prefix = f"{label}: " if label else ""
+            msg = f"WARNING: post-hook failed: {warning}"
+            if self._color:
+                msg = f"\033[1;38;5;208m{msg}\033[0m"
+            self._write(f"  {self._worker_tag(worker_id)} {prefix}{msg}")
+
     def on_qos_update(self, queued, running, limit):
         new_qos = (queued, running, limit)
         with self._lock:
@@ -381,6 +403,17 @@ class TextualAdapter(OutputAdapter):
 
         self._post(WorkerRequestLabels(worker_id, labels))
 
+    def on_task_hook_started(self, worker_id, command):
+        from .textual_app import WorkerMessage
+
+        self._post(WorkerMessage(worker_id, f"Running post-hook: {command}"))
+
+    def on_task_hook_finished(self, worker_id, success, warning=""):
+        from .textual_app import WorkerMessage
+
+        if not success:
+            self._post(WorkerMessage(worker_id, f"Post-hook failed: {warning}"))
+
     def on_qos_update(self, queued, running, limit):
         from .textual_app import QosUpdate
 
@@ -470,6 +503,15 @@ class LoggingAdapter(OutputAdapter):
     def on_task_request_labels(self, worker_id, labels):
         self._write(f"[worker {worker_id}] labels: {labels}")
         self._inner.on_task_request_labels(worker_id, labels)
+
+    def on_task_hook_started(self, worker_id, command):
+        self._write(f"[worker {worker_id}] post-hook started: {command}")
+        self._inner.on_task_hook_started(worker_id, command)
+
+    def on_task_hook_finished(self, worker_id, success, warning=""):
+        status = "ok" if success else f"FAILED: {warning}"
+        self._write(f"[worker {worker_id}] post-hook finished: {status}")
+        self._inner.on_task_hook_finished(worker_id, success, warning)
 
     def on_qos_update(self, queued, running, limit):
         self._write(f"qos: queued={queued} running={running} limit={limit}")

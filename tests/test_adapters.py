@@ -80,6 +80,18 @@ class TestOutputAdapterDefaults:
         adapter = _NoOpAdapter()
         adapter.on_qos_update(100, 20, 20)
 
+    def test_on_task_hook_started(self):
+        adapter = _NoOpAdapter()
+        adapter.on_task_hook_started(0, "gzip file.grib")
+
+    def test_on_task_hook_finished(self):
+        adapter = _NoOpAdapter()
+        adapter.on_task_hook_finished(0, True)
+
+    def test_on_task_hook_finished_failure(self):
+        adapter = _NoOpAdapter()
+        adapter.on_task_hook_finished(0, False, "exit code 1")
+
     def test_on_tasks_initialized(self):
         adapter = _NoOpAdapter()
         tasks = [Task("ds", {}, "file.grib")]
@@ -413,6 +425,38 @@ class TestPlainTextAdapter:
         assert result == "unknown_status"
         assert "—" not in result
 
+    def test_hook_started_prints(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append, use_color=False)
+        task = Task("ds", {}, "file.grib")
+        adapter.on_task_started(0, task)
+        messages.clear()
+        adapter.on_task_hook_started(0, "gzip file.grib")
+        assert len(messages) == 1
+        assert "running post-hook" in messages[0]
+        assert "file.grib" in messages[0]
+
+    def test_hook_finished_success_silent(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append, use_color=False)
+        adapter.on_task_hook_finished(0, True)
+        assert len(messages) == 0
+
+    def test_hook_finished_failure_prints_warning(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append, use_color=False)
+        adapter.on_task_hook_finished(0, False, "exit code 1")
+        assert len(messages) == 1
+        assert "WARNING" in messages[0]
+        assert "post-hook failed" in messages[0]
+        assert "exit code 1" in messages[0]
+
+    def test_hook_finished_failure_with_color(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append, use_color=True)
+        adapter.on_task_hook_finished(0, False, "exit code 1")
+        assert "\033[1;38;5;208m" in messages[0]
+
     def test_checksum_interactive_continue(self):
         messages = []
         adapter = PlainTextAdapter(
@@ -514,6 +558,27 @@ class TestLoggingAdapter:
         adapter.on_task_request_labels(0, labels)
         assert "labels:" in log_file.getvalue()
         inner.on_task_request_labels.assert_called_once_with(0, labels)
+
+    def test_on_task_hook_started(self):
+        adapter, inner, log_file = self._make_adapter()
+        adapter.on_task_hook_started(0, "gzip file.grib")
+        assert "post-hook started" in log_file.getvalue()
+        assert "gzip file.grib" in log_file.getvalue()
+        inner.on_task_hook_started.assert_called_once_with(0, "gzip file.grib")
+
+    def test_on_task_hook_finished_success(self):
+        adapter, inner, log_file = self._make_adapter()
+        adapter.on_task_hook_finished(0, True)
+        assert "post-hook finished: ok" in log_file.getvalue()
+        inner.on_task_hook_finished.assert_called_once_with(0, True, "")
+
+    def test_on_task_hook_finished_failure(self):
+        adapter, inner, log_file = self._make_adapter()
+        adapter.on_task_hook_finished(0, False, "exit code 1")
+        log = log_file.getvalue()
+        assert "FAILED" in log
+        assert "exit code 1" in log
+        inner.on_task_hook_finished.assert_called_once_with(0, False, "exit code 1")
 
     def test_on_qos_update(self):
         adapter, inner, log_file = self._make_adapter()
@@ -774,6 +839,35 @@ class TestTextualAdapter:
         assert msgs[0].queued == 100
         assert msgs[0].running == 50
         assert msgs[0].limit == 400
+
+    def test_on_task_hook_started(self):
+        from cdsswarm.textual_app import WorkerMessage
+
+        adapter, app = self._make_adapter()
+        adapter.on_task_hook_started(0, "gzip file.grib")
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], WorkerMessage)
+        assert "post-hook" in msgs[0].message.lower()
+        assert "gzip file.grib" in msgs[0].message
+
+    def test_on_task_hook_finished_success(self):
+        adapter, app = self._make_adapter()
+        adapter.on_task_hook_finished(0, True)
+        # Success is silent for TextualAdapter
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 0
+
+    def test_on_task_hook_finished_failure(self):
+        from cdsswarm.textual_app import WorkerMessage
+
+        adapter, app = self._make_adapter()
+        adapter.on_task_hook_finished(0, False, "exit code 1")
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], WorkerMessage)
+        assert "failed" in msgs[0].message.lower()
+        assert "exit code 1" in msgs[0].message
 
     def test_on_global_message(self):
         from cdsswarm.textual_app import GlobalMessage

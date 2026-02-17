@@ -10,6 +10,7 @@ import pytest
 
 from cdsswarm.cli import _resolve_mode, _run_script, load_requests, main
 from cdsswarm.core import Result, Task
+from cdsswarm.state import SessionState, session_path
 
 
 @pytest.fixture
@@ -190,6 +191,36 @@ class TestCLIParsing:
         parser = _build_parser()
         args = parser.parse_args(["f.json", "--summary", "report.json"])
         assert args.summary == "report.json"
+
+    def test_post_hook_flag(self):
+        from cdsswarm.cli import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(["f.json", "--post-hook", "gzip {file}"])
+        assert args.post_hook == "gzip {file}"
+
+    def test_post_hook_default_none(self):
+        from cdsswarm.cli import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(["f.json"])
+        assert args.post_hook is None
+
+    def test_resume_flag(self):
+        from cdsswarm.cli import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(["f.json", "--resume"])
+        assert args.resume is True
+        args = parser.parse_args(["f.json", "--no-resume"])
+        assert args.resume is False
+
+    def test_resume_default_none(self):
+        from cdsswarm.cli import _build_parser
+
+        parser = _build_parser()
+        args = parser.parse_args(["f.json"])
+        assert args.resume is None
 
     def test_version(self, capsys):
         from cdsswarm.cli import _build_parser
@@ -449,6 +480,18 @@ class TestRunScript:
         assert call_kwargs["skip_existing"] is True
         mock_instance.run.assert_called_once()
         assert result is not None
+
+    @patch("cdsswarm.cli.SwarmDownloader")
+    def test_with_post_hook(self, mock_cls):
+        tasks = [Task("ds", {}, "out.grib")]
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = [Result(task=tasks[0], success=True)]
+        mock_cls.return_value = mock_instance
+
+        _run_script(tasks, num_workers=1, skip_existing=True, post_hook="gzip {file}")
+
+        call_kwargs = mock_cls.call_args[1]
+        assert call_kwargs["post_hook"] == "gzip {file}"
 
     @patch("cdsswarm.cli.SwarmDownloader")
     def test_with_log_file(self, mock_cls):
@@ -856,3 +899,350 @@ class TestCmdGenerate:
 
         err = capsys.readouterr().err
         assert "Error" in err
+
+
+class TestSessionResume:
+    """Tests for the --resume / --no-resume session resume feature."""
+
+    def _write_tasks(self, tmp_dir, count=2):
+        data = [
+            {
+                "dataset": "reanalysis-era5-single-levels",
+                "request": {"variable": [f"var_{i}"], "year": ["2024"]},
+                "target": os.path.join(tmp_dir, f"output_{i}.grib"),
+            }
+            for i in range(count)
+        ]
+        path = os.path.join(tmp_dir, "requests.json")
+        with open(path, "w") as f:
+            json.dump(data, f)
+        return path, [Task(d["dataset"], d["request"], d["target"]) for d in data]
+
+    def test_fresh_run_creates_state_file(self, tmp_dir, capsys):
+        """A fresh run creates a session state file."""
+        path, tasks = self._write_tasks(tmp_dir, count=1)
+        task = tasks[0]
+        results = [Result(task=task, success=True, start_time=100.0, end_time=200.0)]
+
+        # Point session dir into tmp_dir
+        cache_dir = os.path.join(tmp_dir, "cache")
+        # Compute expected path under the same env override
+        with patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}):
+            sp = session_path(path, "")
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}),
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", return_value=results),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path])
+
+        assert os.path.isfile(sp)
+
+    def test_resume_filters_completed_tasks(self, tmp_dir, capsys):
+        """On resume, completed tasks are filtered out."""
+        path, tasks = self._write_tasks(tmp_dir, count=2)
+        cache_dir = os.path.join(tmp_dir, "cache")
+
+        # Create a state file with first task completed
+        with patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}):
+            sp = session_path(path, "")
+        session = SessionState.new(path, tasks)
+        # Mark first task completed and create the file
+        with open(tasks[0].target, "w") as f:
+            f.write("data")
+        session.mark_completed(tasks[0].target, 10.0, 20.0, 1024)
+        session.save(sp)
+
+        # Now run — should only pass the second task
+        captured_tasks = []
+
+        def fake_run_script(tasks_arg, *a, **kw):
+            captured_tasks.extend(tasks_arg)
+            return [
+                Result(task=t, success=True, start_time=100.0, end_time=200.0)
+                for t in tasks_arg
+            ]
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}),
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", side_effect=fake_run_script),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path])
+
+        assert len(captured_tasks) == 1
+        assert captured_tasks[0].target == tasks[1].target
+
+        out = capsys.readouterr().out
+        assert "Resuming" in out or "Summary" in out
+
+    def test_no_resume_ignores_state_file(self, tmp_dir, capsys):
+        """--no-resume starts fresh even if state file exists."""
+        path, tasks = self._write_tasks(tmp_dir, count=2)
+        cache_dir = os.path.join(tmp_dir, "cache")
+
+        # Create a state file with first task completed
+        with patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}):
+            sp = session_path(path, "")
+        session = SessionState.new(path, tasks)
+        with open(tasks[0].target, "w") as f:
+            f.write("data")
+        session.mark_completed(tasks[0].target, 10.0, 20.0, 1024)
+        session.save(sp)
+
+        captured_tasks = []
+
+        def fake_run_script(tasks_arg, *a, **kw):
+            captured_tasks.extend(tasks_arg)
+            return [
+                Result(task=t, success=True, start_time=100.0, end_time=200.0)
+                for t in tasks_arg
+            ]
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}),
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", side_effect=fake_run_script),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path, "--no-resume"])
+
+        # Both tasks should be passed since we're starting fresh
+        assert len(captured_tasks) == 2
+
+    def test_corrupt_state_file_starts_fresh(self, tmp_dir, capsys):
+        """Corrupt state file triggers a warning and starts fresh."""
+        path, tasks = self._write_tasks(tmp_dir, count=1)
+        cache_dir = os.path.join(tmp_dir, "cache")
+
+        with patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}):
+            sp = session_path(path, "")
+        os.makedirs(os.path.dirname(sp), exist_ok=True)
+        with open(sp, "w") as f:
+            f.write("{corrupt json!!")
+
+        captured_tasks = []
+
+        def fake_run_script(tasks_arg, *a, **kw):
+            captured_tasks.extend(tasks_arg)
+            return [
+                Result(task=t, success=True, start_time=100.0, end_time=200.0)
+                for t in tasks_arg
+            ]
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}),
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", side_effect=fake_run_script),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path])
+
+        err = capsys.readouterr().err
+        assert "corrupt session file" in err.lower() or "Warning" in err
+        assert len(captured_tasks) == 1
+
+    def test_all_completed_exits_0(self, tmp_dir, capsys):
+        """When all tasks already completed, exit 0 with message."""
+        path, tasks = self._write_tasks(tmp_dir, count=1)
+        cache_dir = os.path.join(tmp_dir, "cache")
+
+        with patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}):
+            sp = session_path(path, "")
+        session = SessionState.new(path, tasks)
+        with open(tasks[0].target, "w") as f:
+            f.write("data")
+        session.mark_completed(tasks[0].target, 10.0, 20.0, 1024)
+        session.save(sp)
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path])
+
+        out = capsys.readouterr().out
+        assert "already completed" in out.lower()
+
+    def test_resume_notification_message(self, tmp_dir, capsys):
+        """Resume emits notification message via pre_messages."""
+        path, tasks = self._write_tasks(tmp_dir, count=2)
+        cache_dir = os.path.join(tmp_dir, "cache")
+
+        with patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}):
+            sp = session_path(path, "")
+        session = SessionState.new(path, tasks)
+        with open(tasks[0].target, "w") as f:
+            f.write("data")
+        session.mark_completed(tasks[0].target, 10.0, 20.0, 1024)
+        session.save(sp)
+
+        captured_pre = []
+
+        def fake_run_script(tasks_arg, *a, **kw):
+            if kw.get("pre_messages"):
+                captured_pre.extend(kw["pre_messages"])
+            return [
+                Result(task=t, success=True, start_time=100.0, end_time=200.0)
+                for t in tasks_arg
+            ]
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}),
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", side_effect=fake_run_script),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path])
+
+        assert len(captured_pre) == 1
+        assert "Resuming" in captured_pre[0]
+        assert "1/2" in captured_pre[0]
+        assert "--no-resume" in captured_pre[0]
+
+    def test_callbacks_update_state_file(self, tmp_dir, capsys):
+        """on_task_done and on_request_id callbacks update the state file."""
+        path, tasks = self._write_tasks(tmp_dir, count=2)
+        cache_dir = os.path.join(tmp_dir, "cache")
+
+        with patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}):
+            sp = session_path(path, "")
+
+        def fake_run_script(tasks_arg, *a, **kw):
+            on_done = kw.get("on_task_done")
+            on_rid = kw.get("on_request_id")
+            results = []
+            for t in tasks_arg:
+                if on_rid:
+                    on_rid(t.target, f"rid-{t.label}")
+                r = Result(
+                    task=t, success=True, start_time=100.0, end_time=200.0, file_size=42
+                )
+                results.append(r)
+                if on_done:
+                    on_done(r, f"rid-{t.label}")
+            return results
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}),
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", side_effect=fake_run_script),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path])
+
+        # Verify state file was updated by the callbacks
+        loaded = SessionState.load(sp)
+        for t in tasks:
+            ts = loaded.tasks[t.target]
+            assert ts.status == "completed"
+            assert ts.cds_request_id == f"rid-{t.label}"
+            assert ts.file_size == 42
+
+    def test_callback_marks_failure(self, tmp_dir, capsys):
+        """on_task_done callback records failures in state file."""
+        path, tasks = self._write_tasks(tmp_dir, count=1)
+        cache_dir = os.path.join(tmp_dir, "cache")
+
+        with patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}):
+            sp = session_path(path, "")
+
+        def fake_run_script(tasks_arg, *a, **kw):
+            on_done = kw.get("on_task_done")
+            t = tasks_arg[0]
+            r = Result(
+                task=t, success=False, error="timeout", start_time=1.0, end_time=2.0
+            )
+            if on_done:
+                on_done(r, "rid-fail")
+            return [r]
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}),
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", side_effect=fake_run_script),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            main([path])
+
+        loaded = SessionState.load(sp)
+        ts = loaded.tasks[tasks[0].target]
+        assert ts.status == "failed"
+        assert ts.error == "timeout"
+        assert ts.cds_request_id == "rid-fail"
+
+    def test_resume_merges_new_tasks(self, tmp_dir, capsys):
+        """New tasks in regenerated request file are merged into session."""
+        # Create initial session with 1 task
+        path, tasks = self._write_tasks(tmp_dir, count=1)
+        cache_dir = os.path.join(tmp_dir, "cache")
+
+        with patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}):
+            sp = session_path(path, "")
+        session = SessionState.new(path, tasks)
+        session.save(sp)
+
+        # Now regenerate request file with 2 tasks (adds a new one)
+        data = [
+            {
+                "dataset": "reanalysis-era5-single-levels",
+                "request": {"variable": [f"var_{i}"], "year": ["2024"]},
+                "target": os.path.join(tmp_dir, f"output_{i}.grib"),
+            }
+            for i in range(2)
+        ]
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+        captured_tasks = []
+
+        def fake_run_script(tasks_arg, *a, **kw):
+            captured_tasks.extend(tasks_arg)
+            return [
+                Result(task=t, success=True, start_time=100.0, end_time=200.0)
+                for t in tasks_arg
+            ]
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}),
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", side_effect=fake_run_script),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path])
+
+        # Both tasks should be pending (original was pending, new was merged)
+        assert len(captured_tasks) == 2
+        # State file should have both tasks
+        loaded = SessionState.load(sp)
+        assert len(loaded.tasks) == 2

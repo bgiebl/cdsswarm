@@ -67,6 +67,16 @@ class TestDelegation:
         adapter.on_qos_update(3, 2, 10)
         inner.on_qos_update.assert_called_once_with(3, 2, 10)
 
+    def test_on_task_hook_started_delegates(self):
+        adapter, inner, _ = _make_adapter()
+        adapter.on_task_hook_started(0, "gzip file.grib")
+        inner.on_task_hook_started.assert_called_once_with(0, "gzip file.grib")
+
+    def test_on_task_hook_finished_delegates(self):
+        adapter, inner, _ = _make_adapter()
+        adapter.on_task_hook_finished(0, False, "exit code 1")
+        inner.on_task_hook_finished.assert_called_once_with(0, False, "exit code 1")
+
 
 class TestChecksum:
     def test_checksum_result_return_value_forwarded(self):
@@ -115,6 +125,20 @@ class TestLogging:
         adapter, _, log_file = _make_adapter()
         adapter.on_task_progress(0, 1024, 4096)
         assert log_file.getvalue() == ""
+
+    def test_hook_started_logged(self):
+        adapter, _, log_file = _make_adapter()
+        adapter.on_task_hook_started(0, "gzip file.grib")
+        content = log_file.getvalue()
+        assert "post-hook started" in content
+        assert "gzip file.grib" in content
+
+    def test_hook_finished_logged(self):
+        adapter, _, log_file = _make_adapter()
+        adapter.on_task_hook_finished(0, False, "exit code 1")
+        content = log_file.getvalue()
+        assert "FAILED" in content
+        assert "exit code 1" in content
 
     def test_multiple_events(self):
         adapter, _, log_file = _make_adapter()

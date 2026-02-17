@@ -51,6 +51,7 @@ def download(
     reuse_jobs: bool = True,
     max_retries: int = 3,
     on_message=None,
+    post_hook: str = "",
 ) -> list[Result]:
     """Download multiple CDS API requests concurrently.
 
@@ -61,6 +62,8 @@ def download(
         reuse_jobs: Reuse existing CDS jobs with matching parameters.
         max_retries: Max retry attempts per task (1 to disable retries).
         on_message: Optional callback ``fn(message: str)`` for status messages.
+        post_hook: Shell command to run after each successful download.
+            Placeholders: {file} (output path), {dataset} (dataset name).
 
     Returns:
         List of Result objects. Returns empty list if interrupted.
@@ -73,6 +76,7 @@ def download(
         skip_existing=skip_existing,
         reuse_jobs=reuse_jobs,
         max_retries=max_retries,
+        post_hook=post_hook,
     )
     results = downloader.run()
     return results if results is not None else []

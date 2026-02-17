@@ -13,6 +13,7 @@ except ModuleNotFoundError:  # pragma: no cover
 DEFAULTS: dict[str, object] = {
     "workers": 4,
     "max_retries": 3,
+    "resume": True,
     "reuse": True,
     "skip_existing": True,
     "ignore_warnings": False,
@@ -20,6 +21,7 @@ DEFAULTS: dict[str, object] = {
     "output_dir": "",
     "log": "",
     "summary": "",
+    "post_hook": "",
 }
 
 _VALID_KEYS = set(DEFAULTS)
@@ -30,6 +32,7 @@ PROJECT_CONFIG_NAME = ".cdsswarm.toml"
 _TYPE_CHECKS: dict[str, type | tuple[type, ...]] = {
     "workers": int,
     "max_retries": int,
+    "resume": bool,
     "reuse": bool,
     "skip_existing": bool,
     "ignore_warnings": bool,
@@ -37,6 +40,7 @@ _TYPE_CHECKS: dict[str, type | tuple[type, ...]] = {
     "output_dir": str,
     "log": str,
     "summary": str,
+    "post_hook": str,
 }
 
 _VALUE_CHECKS: dict[str, object] = {

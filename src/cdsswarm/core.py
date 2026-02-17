@@ -5,8 +5,10 @@ from __future__ import annotations
 import itertools
 import logging
 import os
+import subprocess
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
@@ -88,6 +90,11 @@ class SwarmDownloader:
         skip_existing: bool = True,
         reuse_jobs: bool = True,
         max_retries: int = 3,
+        post_hook: str = "",
+        on_task_done: Callable[[Result, str], None] | None = None,
+        on_request_id: Callable[[str, str], None] | None = None,
+        initial_reuse_map: dict[str, str] | None = None,
+        pre_messages: list[str] | None = None,
     ):
         self._all_tasks = list(tasks)
         self._adapter = adapter
@@ -95,11 +102,17 @@ class SwarmDownloader:
         self._skip_existing = skip_existing
         self._reuse_jobs = reuse_jobs
         self._max_retries = max(max_retries, 1)
+        self._post_hook = post_hook
+        self._on_task_done = on_task_done
+        self._on_request_id = on_request_id
+        self._initial_reuse_map = initial_reuse_map or {}
+        self._pre_messages = pre_messages or []
         self._cancel_event = threading.Event()
         self._state: _WorkerState | None = None
         self._pool: ThreadPoolExecutor | None = None
         self._task_timing: dict[str, tuple[float, float, int]] = {}
         self._task_warnings: dict[str, list[str]] = {}
+        self._task_request_ids: dict[str, str] = {}
 
     def cancel(self):
         """Cancel all in-flight CDS requests and shut down the pool.
@@ -116,6 +129,9 @@ class SwarmDownloader:
 
     def run(self) -> list[Result] | None:
         """Execute all downloads. Returns list of Results, or None if interrupted."""
+        for msg in self._pre_messages:
+            self._adapter.on_global_message(msg)
+
         if self._skip_existing:
             pending = [t for t in self._all_tasks if not os.path.exists(t.target)]
             skipped = len(self._all_tasks) - len(pending)
@@ -143,21 +159,29 @@ class SwarmDownloader:
         )
         self._adapter.on_tasks_initialized(self._all_tasks, skipped_targets)
 
-        reuse_map: dict[str, str] = {}
+        reuse_map: dict[str, str] = dict(self._initial_reuse_map)
         if self._reuse_jobs and pending:
-            self._adapter.on_global_message("Checking for reusable CDS jobs...")
-            try:
-                lookup_client = cdsapi.Client(quiet=True, progress=False)
-                reuse_map = find_reusable_jobs(lookup_client, pending)
-            except Exception as exc:
-                self._adapter.on_global_message(
-                    f"Job reuse lookup failed ({exc}), submitting new requests"
-                )
-            else:
-                if reuse_map:
+            # Only scan API for tasks not already in the initial reuse map
+            tasks_to_scan = [t for t in pending if t.target not in reuse_map]
+            if tasks_to_scan:
+                self._adapter.on_global_message("Checking for reusable CDS jobs...")
+                try:
+                    lookup_client = cdsapi.Client(quiet=True, progress=False)
+                    api_reuse = find_reusable_jobs(lookup_client, tasks_to_scan)
+                    reuse_map.update(api_reuse)
+                except Exception as exc:
                     self._adapter.on_global_message(
-                        f"Found {len(reuse_map)} reusable job(s)"
+                        f"Job reuse lookup failed ({exc}), submitting new requests"
                     )
+                else:
+                    if api_reuse:
+                        self._adapter.on_global_message(
+                            f"Found {len(api_reuse)} reusable job(s)"
+                        )
+            if self._initial_reuse_map:
+                self._adapter.on_global_message(
+                    f"Reusing {len(self._initial_reuse_map)} saved job ID(s) from session"
+                )
 
         self._state = state = _WorkerState()
         results: list[Result] = []
@@ -205,29 +229,33 @@ class SwarmDownloader:
                 try:
                     future.result()
                     self._adapter.on_task_completed(wid, task, True)
-                    results.append(
-                        Result(
-                            task=task,
-                            success=True,
-                            start_time=timing[0],
-                            end_time=timing[1],
-                            file_size=timing[2],
-                            warnings=warns,
-                        )
+                    result = Result(
+                        task=task,
+                        success=True,
+                        start_time=timing[0],
+                        end_time=timing[1],
+                        file_size=timing[2],
+                        warnings=warns,
                     )
+                    results.append(result)
+                    if self._on_task_done is not None:
+                        rid = self._task_request_ids.get(task.target, "")
+                        self._on_task_done(result, rid)
                 except Exception as e:
                     self._adapter.on_task_completed(wid, task, False, str(e))
-                    results.append(
-                        Result(
-                            task=task,
-                            success=False,
-                            error=str(e),
-                            start_time=timing[0],
-                            end_time=timing[1],
-                            file_size=timing[2],
-                            warnings=warns,
-                        )
+                    result = Result(
+                        task=task,
+                        success=False,
+                        error=str(e),
+                        start_time=timing[0],
+                        end_time=timing[1],
+                        file_size=timing[2],
+                        warnings=warns,
                     )
+                    results.append(result)
+                    if self._on_task_done is not None:
+                        rid = self._task_request_ids.get(task.target, "")
+                        self._on_task_done(result, rid)
         except KeyboardInterrupt:
             self._cancel_event.set()
             self._adapter.on_global_message("Interrupted — cancelling CDS requests...")
@@ -271,6 +299,9 @@ class SwarmDownloader:
                 self._adapter.on_task_request_id(wid, rid)
                 with state.lock:
                     state.active_requests[task.target] = (rid, client)
+                    self._task_request_ids[task.target] = rid
+                if self._on_request_id is not None:
+                    self._on_request_id(task.target, rid)
 
         def _info_cb(msg, *args):
             try:
@@ -382,12 +413,44 @@ class SwarmDownloader:
                 if should_retry:
                     self._adapter.on_task_message(wid, "Retrying download...")
                     continue
+
+                if self._post_hook:
+                    self._run_post_hook(wid, task, state)
+
                 break  # Success, exit retry loop
         finally:
             end = time.time()
             size = os.path.getsize(task.target) if os.path.exists(task.target) else 0
             with state.lock:
                 self._task_timing[task.target] = (start, end, size)
+
+    def _run_post_hook(self, wid: int, task: Task, state: _WorkerState):
+        """Run the post-download hook command. Failure = warning only."""
+        cmd = self._post_hook.replace("{file}", task.target).replace(
+            "{dataset}", task.dataset
+        )
+        self._adapter.on_task_hook_started(wid, cmd)
+        try:
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if result.returncode != 0:
+                stderr = result.stderr.strip()
+                warning = f"exit code {result.returncode}"
+                if stderr:
+                    warning += f": {stderr}"
+                self._adapter.on_task_hook_finished(wid, False, warning)
+                with state.lock:
+                    self._task_warnings.setdefault(task.target, []).append(
+                        f"Post-hook failed ({warning})"
+                    )
+            else:
+                self._adapter.on_task_hook_finished(wid, True)
+        except Exception as exc:
+            warning = str(exc)
+            self._adapter.on_task_hook_finished(wid, False, warning)
+            with state.lock:
+                self._task_warnings.setdefault(task.target, []).append(
+                    f"Post-hook error ({warning})"
+                )
 
     def _get_worker_id(self, state: _WorkerState) -> int:
         tid = threading.current_thread().ident

@@ -921,6 +921,317 @@ class TestSwarmDownloader:
         ]
         assert len(force_msgs) >= 1
 
+    @patch("cdsswarm.core.subprocess")
+    @patch("cdsswarm.core.cdsapi")
+    def test_post_hook_runs_with_placeholders(
+        self, mock_cdsapi, mock_subprocess, tmp_dir
+    ):
+        """Post-hook runs with {file} and {dataset} expanded."""
+        mock_client = MagicMock()
+
+        def fake_retrieve(dataset, request, target):
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+        mock_subprocess.run.return_value = MagicMock(returncode=0)
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(
+            tasks, adapter, num_workers=1, post_hook="gzip {file} && echo {dataset}"
+        )
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 1
+        assert results[0].success
+        mock_subprocess.run.assert_called_once()
+        cmd = mock_subprocess.run.call_args[0][0]
+        assert tasks[0].target in cmd
+        assert tasks[0].dataset in cmd
+        adapter.on_task_hook_started.assert_called_once()
+        adapter.on_task_hook_finished.assert_called_once_with(0, True)
+
+    @patch("cdsswarm.core.subprocess")
+    @patch("cdsswarm.core.cdsapi")
+    def test_post_hook_failure_adds_warning(
+        self, mock_cdsapi, mock_subprocess, tmp_dir
+    ):
+        """Post-hook failure adds warning but task stays successful."""
+        mock_client = MagicMock()
+
+        def fake_retrieve(dataset, request, target):
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+        mock_subprocess.run.return_value = MagicMock(
+            returncode=1, stderr="command not found"
+        )
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(
+            tasks, adapter, num_workers=1, post_hook="bad-command {file}"
+        )
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 1
+        assert results[0].success
+        assert any("Post-hook failed" in w for w in results[0].warnings)
+        adapter.on_task_hook_finished.assert_called_once()
+        call_args = adapter.on_task_hook_finished.call_args
+        assert call_args[0][1] is False  # success=False
+
+    @patch("cdsswarm.core.subprocess")
+    @patch("cdsswarm.core.cdsapi")
+    def test_post_hook_exception_adds_warning(
+        self, mock_cdsapi, mock_subprocess, tmp_dir
+    ):
+        """Post-hook exception adds warning but task stays successful."""
+        mock_client = MagicMock()
+
+        def fake_retrieve(dataset, request, target):
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+        mock_subprocess.run.side_effect = OSError("exec failed")
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(
+            tasks, adapter, num_workers=1, post_hook="bad {file}"
+        )
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 1
+        assert results[0].success
+        assert any("Post-hook error" in w for w in results[0].warnings)
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_no_post_hook_when_not_set(self, mock_cdsapi, tmp_dir):
+        """No post-hook is run when post_hook is empty."""
+        mock_client = MagicMock()
+
+        def fake_retrieve(dataset, request, target):
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1)
+        results = downloader.run()
+
+        assert results is not None
+        assert results[0].success
+        adapter.on_task_hook_started.assert_not_called()
+        adapter.on_task_hook_finished.assert_not_called()
+
+    @patch("cdsswarm.core.subprocess")
+    @patch("cdsswarm.core.cdsapi")
+    def test_post_hook_not_run_on_failed_download(
+        self, mock_cdsapi, mock_subprocess, tmp_dir
+    ):
+        """Post-hook is not run when the download itself fails."""
+        mock_client = MagicMock()
+        mock_client.retrieve.side_effect = RuntimeError("CDS error")
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(
+            tasks, adapter, num_workers=1, post_hook="echo {file}"
+        )
+        results = downloader.run()
+
+        assert results is not None
+        assert not results[0].success
+        mock_subprocess.run.assert_not_called()
+        adapter.on_task_hook_started.assert_not_called()
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_on_task_done_called_on_success(self, mock_cdsapi, tmp_dir):
+        """on_task_done callback is called with Result and request_id on success."""
+        mock_client = MagicMock()
+
+        def fake_retrieve(dataset, request, target):
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        done_calls = []
+        downloader = SwarmDownloader(
+            tasks,
+            adapter,
+            num_workers=1,
+            on_task_done=lambda result, rid: done_calls.append((result, rid)),
+        )
+        results = downloader.run()
+
+        assert results is not None
+        assert len(done_calls) == 1
+        assert done_calls[0][0].success is True
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_on_task_done_called_on_failure(self, mock_cdsapi, tmp_dir):
+        """on_task_done callback is called with Result and request_id on failure."""
+        mock_client = MagicMock()
+        mock_client.retrieve.side_effect = RuntimeError("fail")
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        done_calls = []
+        downloader = SwarmDownloader(
+            tasks,
+            adapter,
+            num_workers=1,
+            on_task_done=lambda result, rid: done_calls.append((result, rid)),
+        )
+        results = downloader.run()
+
+        assert results is not None
+        assert len(done_calls) == 1
+        assert done_calls[0][0].success is False
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_on_task_done_not_called_when_none(self, mock_cdsapi, tmp_dir):
+        """No error when on_task_done is None."""
+        mock_client = MagicMock()
+
+        def fake_retrieve(dataset, request, target):
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1)
+        results = downloader.run()
+        assert results is not None
+        assert len(results) == 1
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_on_request_id_called(self, mock_cdsapi, tmp_dir):
+        """on_request_id callback is called when CDS returns a request ID."""
+        captured_ids = []
+
+        def capture_client(**kwargs):
+            client = MagicMock()
+            info_cb = kwargs.get("info_callback")
+
+            def fake_retrieve(dataset, request, target):
+                if info_cb:
+                    info_cb("Request ID is abc-12345-def")
+                with open(target, "w") as f:
+                    f.write("data")
+
+            client.retrieve.side_effect = fake_retrieve
+            return client
+
+        mock_cdsapi.Client.side_effect = capture_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(
+            tasks,
+            adapter,
+            num_workers=1,
+            on_request_id=lambda target, rid: captured_ids.append((target, rid)),
+        )
+        results = downloader.run()
+
+        assert results is not None
+        assert len(captured_ids) >= 1
+        assert captured_ids[0][0] == tasks[0].target
+
+    @patch("cdsswarm.core.find_reusable_jobs")
+    @patch("cdsswarm.core.cdsapi")
+    def test_initial_reuse_map_skips_api_scan(self, mock_cdsapi, mock_find, tmp_dir):
+        """initial_reuse_map tasks skip API scan, others still use find_reusable_jobs."""
+        tasks = _make_tasks(tmp_dir, count=2)
+
+        # API returns nothing for the scanned task
+        mock_find.return_value = {}
+
+        mock_inner = MagicMock()
+        mock_remote = MagicMock()
+        mock_remote.download.side_effect = lambda t: open(t, "w").close()
+        mock_inner.get_remote.return_value = mock_remote
+
+        mock_client = MagicMock()
+        mock_client.client = mock_inner
+
+        def fake_retrieve(dataset, request, target):
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(
+            tasks,
+            adapter,
+            num_workers=1,
+            reuse_jobs=True,
+            initial_reuse_map={tasks[0].target: "saved-job-id"},
+        )
+        results = downloader.run()
+
+        assert results is not None
+        assert len(results) == 2
+        assert all(r.success for r in results)
+        # API scan should only look at task[1], not task[0]
+        scanned_tasks = mock_find.call_args[0][1]
+        assert len(scanned_tasks) == 1
+        assert scanned_tasks[0].target == tasks[1].target
+        # task[0] used the saved job ID
+        mock_inner.get_remote.assert_called_once_with("saved-job-id")
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_pre_messages_emitted(self, mock_cdsapi, tmp_dir):
+        """pre_messages are emitted via adapter at start of run()."""
+        mock_client = MagicMock()
+
+        def fake_retrieve(dataset, request, target):
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(
+            tasks,
+            adapter,
+            num_workers=1,
+            pre_messages=["Resuming: 3/5 tasks remaining"],
+        )
+        results = downloader.run()
+
+        assert results is not None
+        # First on_global_message call should be the pre_message
+        first_call = adapter.on_global_message.call_args_list[0]
+        assert "Resuming" in str(first_call)
+
     @patch("cdsswarm.core.cdsapi")
     def test_cancel_during_retry_sleep(self, mock_cdsapi, tmp_dir):
         """Cancel event during retry sleep stops retrying."""

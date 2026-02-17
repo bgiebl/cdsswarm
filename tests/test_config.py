@@ -58,8 +58,18 @@ class TestLoadToml:
         result = _load_toml(cfg)
         assert result == {"output_dir": "data/cds/"}
 
+    def test_post_hook_value(self, tmp_path):
+        cfg = tmp_path / ".cdsswarm.toml"
+        cfg.write_text('post-hook = "gzip {file}"\n')
+        result = _load_toml(cfg)
+        assert result == {"post_hook": "gzip {file}"}
+
 
 class TestDefaults:
+    def test_resume_in_defaults(self):
+        assert "resume" in DEFAULTS
+        assert DEFAULTS["resume"] is True
+
     def test_log_in_defaults(self):
         assert "log" in DEFAULTS
         assert DEFAULTS["log"] == ""
@@ -67,6 +77,10 @@ class TestDefaults:
     def test_summary_in_defaults(self):
         assert "summary" in DEFAULTS
         assert DEFAULTS["summary"] == ""
+
+    def test_post_hook_in_defaults(self):
+        assert "post_hook" in DEFAULTS
+        assert DEFAULTS["post_hook"] == ""
 
 
 class TestValidateConfig:
@@ -104,6 +118,20 @@ class TestValidateConfig:
 
     def test_summary_valid(self):
         _validate_config({"summary": "report.json"}, "test")
+
+    def test_post_hook_wrong_type(self):
+        with pytest.raises(ValueError, match="must be str"):
+            _validate_config({"post_hook": 123}, "test")
+
+    def test_post_hook_valid(self):
+        _validate_config({"post_hook": "gzip {file}"}, "test")
+
+    def test_resume_wrong_type(self):
+        with pytest.raises(ValueError, match="must be bool"):
+            _validate_config({"resume": "yes"}, "test")
+
+    def test_resume_valid(self):
+        _validate_config({"resume": False}, "test")
 
 
 class TestLoadConfig:

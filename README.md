@@ -134,7 +134,7 @@ for r in results:
 usage: cdsswarm [-h] [--version] [-w WORKERS] [-m {interactive,script,auto}]
                 [--no-skip] [--reuse | --no-reuse] [--max-retries MAX_RETRIES]
                 [--output-dir OUTPUT_DIR] [--dry-run] [--log FILE]
-                [--summary FILE]
+                [--summary FILE] [--post-hook CMD]
                 requests_file
 ```
 
@@ -150,8 +150,26 @@ usage: cdsswarm [-h] [--version] [-w WORKERS] [-m {interactive,script,auto}]
 | `--dry-run` | Show what would be downloaded without actually downloading |
 | `--log FILE` | Write timestamped log to a file |
 | `--summary FILE` | Export summary as JSON (`.json`) or CSV (`.csv`) |
+| `--post-hook CMD` | Shell command to run after each successful download (see below) |
 
 In `auto` mode, the TUI is used when stdout is a TTY; otherwise it falls back to script mode.
+
+### Post-download hooks
+
+The `--post-hook` option runs a shell command after each file is successfully downloaded. Use `{file}` and `{dataset}` as placeholders:
+
+```bash
+# Compress each file after download
+cdsswarm requests.json --post-hook "gzip {file}"
+
+# Convert GRIB to NetCDF with CDO
+cdsswarm requests.json --post-hook "cdo -f nc copy {file} {file}.nc"
+
+# Upload to S3
+cdsswarm requests.json --post-hook "aws s3 cp {file} s3://my-bucket/cds/"
+```
+
+Hook failures produce a warning but do not mark the download as failed — the file is already on disk.
 
 ## Request File Format
 
@@ -232,6 +250,7 @@ Download multiple CDS API requests concurrently.
 | `reuse_jobs` | `bool` | `True` | Reuse existing CDS jobs with matching parameters |
 | `max_retries` | `int` | `3` | Max retry attempts per task (1 to disable) |
 | `on_message` | `callable` | `None` | Callback `fn(message: str)` for status updates |
+| `post_hook` | `str` | `""` | Shell command to run after each successful download (`{file}`, `{dataset}`) |
 
 Returns a `list[Result]`. Returns an empty list if interrupted by `KeyboardInterrupt`.
 

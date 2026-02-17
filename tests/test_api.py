@@ -78,6 +78,32 @@ class TestPublicAPI:
             assert results[0].success
             mock_cdsapi.Client.assert_not_called()
 
+    @patch("cdsswarm.core.subprocess")
+    @patch("cdsswarm.core.cdsapi")
+    def test_download_with_post_hook(self, mock_cdsapi, mock_subprocess):
+        """download() passes post_hook to SwarmDownloader."""
+        with tempfile.TemporaryDirectory() as tmp:
+            mock_client = MagicMock()
+
+            def fake_retrieve(dataset, request, target):
+                with open(target, "w") as f:
+                    f.write("data")
+
+            mock_client.retrieve.side_effect = fake_retrieve
+            mock_cdsapi.Client.return_value = mock_client
+            mock_subprocess.run.return_value = MagicMock(returncode=0)
+
+            tasks = [
+                Task("ds", {"variable": ["t2m"]}, os.path.join(tmp, "out.grib")),
+            ]
+            results = download(tasks, num_workers=1, post_hook="ls -la {file}")
+
+            assert len(results) == 1
+            assert results[0].success
+            mock_subprocess.run.assert_called_once()
+            cmd = mock_subprocess.run.call_args[0][0]
+            assert "out.grib" in cmd
+
     @patch("cdsswarm.core.cdsapi")
     def test_download_failure_returns_error(self, mock_cdsapi):
         """download() returns Result with error on failure."""

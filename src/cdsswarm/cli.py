@@ -90,6 +90,11 @@ def _run_interactive(
     reuse_jobs: bool = True,
     max_retries: int = 3,
     log_file=None,
+    post_hook: str = "",
+    on_task_done=None,
+    on_request_id=None,
+    initial_reuse_map=None,
+    pre_messages=None,
 ):
     """Launch Textual TUI and run downloads inside it."""
     from .textual_app import CdsswarmApp
@@ -116,6 +121,11 @@ def _run_interactive(
                     skip_existing=skip_existing,
                     reuse_jobs=reuse_jobs,
                     max_retries=max_retries,
+                    post_hook=post_hook,
+                    on_task_done=on_task_done,
+                    on_request_id=on_request_id,
+                    initial_reuse_map=initial_reuse_map,
+                    pre_messages=pre_messages,
                 )
 
         def run(self):
@@ -147,6 +157,11 @@ def _run_script(
     max_retries: int = 3,
     log_file=None,
     ignore_warnings: bool = False,
+    post_hook: str = "",
+    on_task_done=None,
+    on_request_id=None,
+    initial_reuse_map=None,
+    pre_messages=None,
 ):
     """Run downloads with plain text output."""
     adapter = PlainTextAdapter(interactive=not ignore_warnings)
@@ -159,6 +174,11 @@ def _run_script(
         skip_existing=skip_existing,
         reuse_jobs=reuse_jobs,
         max_retries=max_retries,
+        post_hook=post_hook,
+        on_task_done=on_task_done,
+        on_request_id=on_request_id,
+        initial_reuse_map=initial_reuse_map,
+        pre_messages=pre_messages,
     )
     return downloader.run()
 
@@ -200,6 +220,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Re-download files that already exist",
     )
     parser.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Resume interrupted session if state file exists (default: enabled)",
+    )
+    parser.add_argument(
         "--reuse",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -238,6 +264,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="FILE",
         help="Export summary as JSON (.json) or CSV (.csv)",
+    )
+    parser.add_argument(
+        "--post-hook",
+        default=None,
+        metavar="CMD",
+        help="Shell command to run after each successful download. "
+        "Placeholders: {file} (output path), {dataset} (dataset name)",
     )
     return parser
 
@@ -366,12 +399,14 @@ def main(argv: list[str] | None = None):
     cli_overrides: dict[str, object] = {
         "workers": args.workers,
         "mode": args.mode,
+        "resume": args.resume,
         "reuse": args.reuse,
         "max_retries": args.max_retries,
         "ignore_warnings": args.ignore_warnings if args.ignore_warnings else None,
         "output_dir": args.output_dir,
         "log": args.log,
         "summary": args.summary,
+        "post_hook": args.post_hook,
     }
     if args.no_skip is True:
         cli_overrides["skip_existing"] = False
@@ -415,11 +450,90 @@ def main(argv: list[str] | None = None):
     mode = _resolve_mode(settings["mode"])
     skip_existing = settings["skip_existing"]
     workers = settings["workers"]
+    resume = settings["resume"]
     reuse = settings["reuse"]
     max_retries = settings["max_retries"]
     ignore_warnings = settings["ignore_warnings"]
     log_path = settings["log"]
     summary_path = settings["summary"]
+    post_hook = settings["post_hook"]
+
+    # --- Session resume logic ---
+    from .state import SessionState, session_path
+
+    state_path = session_path(args.requests_file, output_dir)
+    session = None
+    saved_reuse: dict[str, str] = {}
+    pre_messages: list[str] = []
+
+    if resume and os.path.isfile(state_path):
+        try:
+            session = SessionState.load(state_path)
+        except (ValueError, json.JSONDecodeError) as exc:
+            print(
+                f"Warning: corrupt session file, starting fresh ({exc})",
+                file=sys.stderr,
+            )
+            session = None
+
+    if session is not None:
+        # Merge new tasks not in state file
+        current_targets = {t.target for t in tasks}
+        for task in tasks:
+            if task.target not in session.tasks:
+                from .state import TaskState
+
+                session.tasks[task.target] = TaskState(
+                    dataset=task.dataset, request=dict(task.request)
+                )
+        # Filter tasks to pending targets intersected with current task list
+        pending_set = set(session.pending_targets()) & current_targets
+        if not pending_set:
+            print("All tasks already completed (from previous session).")
+            sys.exit(0)
+        tasks = [t for t in tasks if t.target in pending_set]
+        saved_reuse = session.reuse_map()
+        total = len(session.tasks)
+        remaining = len(tasks)
+        pre_messages.append(
+            f"Resuming: {remaining}/{total} tasks remaining "
+            f"(use --no-resume for a clean start)"
+        )
+        session.save(state_path)
+    else:
+        session = SessionState.new(
+            args.requests_file,
+            tasks,
+            settings={
+                "workers": workers,
+                "max_retries": max_retries,
+                "output_dir": output_dir,
+            },
+        )
+        session.save(state_path)
+
+    def _on_task_done(result, request_id):
+        if result.success:
+            session.mark_completed(
+                result.task.target,
+                result.start_time,
+                result.end_time,
+                result.file_size,
+                request_id=request_id,
+            )
+        else:
+            session.mark_failed(
+                result.task.target,
+                result.error,
+                result.start_time,
+                result.end_time,
+                request_id=request_id,
+            )
+        session.save(state_path)
+
+    def _on_request_id(target, request_id):
+        session.set_request_id(target, request_id)
+        session.save(state_path)
 
     log_file = open(log_path, "a") if log_path else None
     try:
@@ -432,6 +546,11 @@ def main(argv: list[str] | None = None):
                 reuse,
                 max_retries,
                 log_file=log_file,
+                post_hook=post_hook,
+                on_task_done=_on_task_done,
+                on_request_id=_on_request_id,
+                initial_reuse_map=saved_reuse,
+                pre_messages=pre_messages,
             )
         else:
             results = _run_script(
@@ -442,6 +561,11 @@ def main(argv: list[str] | None = None):
                 max_retries,
                 log_file=log_file,
                 ignore_warnings=ignore_warnings,
+                post_hook=post_hook,
+                on_task_done=_on_task_done,
+                on_request_id=_on_request_id,
+                initial_reuse_map=saved_reuse,
+                pre_messages=pre_messages,
             )
         wall_end = time.time()
     finally:
@@ -449,6 +573,7 @@ def main(argv: list[str] | None = None):
             log_file.close()
 
     if results is None:
+        session.save(state_path)
         sys.exit(1)
 
     print_summary(results, wall_start, wall_end)
