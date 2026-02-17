@@ -151,6 +151,68 @@ class TestPrintSummary:
         text = "\n".join(lines)
         assert "Errors:" not in text
 
+    def test_path_targets_show_basename(self):
+        results = [_make_result("/tmp/data/output.grib")]
+        lines = []
+        print_summary(results, 100.0, 200.0, write_fn=lines.append)
+        text = "\n".join(lines)
+        assert "output.grib" in text
+        # Full path should not appear in the task rows
+        assert "/tmp/data/output.grib" not in text
+
+    def test_path_targets_in_error_section(self):
+        results = [
+            _make_result(
+                "/tmp/data/bad.grib", success=False, error="Connection timeout"
+            )
+        ]
+        lines = []
+        print_summary(results, 100.0, 200.0, write_fn=lines.append)
+        text = "\n".join(lines)
+        assert "Errors:" in text
+        assert "bad.grib" in text
+        assert "Connection timeout" in text
+
+    def test_warnings_section(self):
+        task = Task("dataset", {"var": "temp"}, "file.grib")
+        result = Result(
+            task=task,
+            success=True,
+            start_time=100.0,
+            end_time=200.0,
+            file_size=1024,
+            warnings=["Checksum mismatch (expected abc123)"],
+        )
+        lines = []
+        print_summary([result], 100.0, 200.0, write_fn=lines.append)
+        text = "\n".join(lines)
+        assert "Warnings:" in text
+        assert "Checksum mismatch (expected abc123)" in text
+
+    def test_no_warnings_section_when_none(self):
+        results = [_make_result("good.grib")]
+        lines = []
+        print_summary(results, 100.0, 200.0, write_fn=lines.append)
+        text = "\n".join(lines)
+        assert "Warnings:" not in text
+
+    def test_warnings_with_path_target_shows_basename(self):
+        task = Task("dataset", {"var": "temp"}, "/data/output/file.grib")
+        result = Result(
+            task=task,
+            success=True,
+            start_time=100.0,
+            end_time=200.0,
+            file_size=1024,
+            warnings=["Checksum mismatch (expected abc123)"],
+        )
+        lines = []
+        print_summary([result], 100.0, 200.0, write_fn=lines.append)
+        text = "\n".join(lines)
+        assert "Warnings:" in text
+        assert "file.grib" in text
+        assert "/data/output/file.grib" not in text
+
 
 class TestExportSummary:
     def test_json_roundtrip(self):

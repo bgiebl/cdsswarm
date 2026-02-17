@@ -1,13 +1,15 @@
 """Tests for CLI and request file loading."""
 
+import io
 import json
 import os
 import tempfile
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cdsswarm.cli import load_requests
-from cdsswarm.core import Task
+from cdsswarm.cli import _resolve_mode, _run_script, load_requests, main
+from cdsswarm.core import Result, Task
 
 
 @pytest.fixture
@@ -325,3 +327,223 @@ class TestConfigIntegration:
 
         output = capsys.readouterr().out
         assert "my/output/out.grib" in output
+
+
+def _patch_config(tmp_dir):
+    """Context manager to isolate config resolution from real config files."""
+    import pathlib
+
+    return (
+        patch(
+            "cdsswarm.config.USER_CONFIG_PATH",
+            pathlib.Path(tmp_dir) / "nope.toml",
+        ),
+        patch(
+            "cdsswarm.config.Path.cwd",
+            return_value=pathlib.Path(tmp_dir),
+        ),
+    )
+
+
+class TestResolveMode:
+    def test_interactive_passthrough(self):
+        assert _resolve_mode("interactive") == "interactive"
+
+    def test_script_passthrough(self):
+        assert _resolve_mode("script") == "script"
+
+    def test_auto_tty(self):
+        with patch("cdsswarm.cli.sys.stdout") as mock_stdout:
+            mock_stdout.isatty.return_value = True
+            assert _resolve_mode("auto") == "interactive"
+
+    def test_auto_no_tty(self):
+        with patch("cdsswarm.cli.sys.stdout") as mock_stdout:
+            mock_stdout.isatty.return_value = False
+            assert _resolve_mode("auto") == "script"
+
+
+class TestMainErrorPaths:
+    def test_file_not_found(self, capsys):
+        with pytest.raises(SystemExit, match="1"):
+            main(["/nonexistent_file_that_does_not_exist.json"])
+        err = capsys.readouterr().err
+        assert "file not found" in err.lower()
+
+    def test_load_error(self, tmp_dir, capsys):
+        path = os.path.join(tmp_dir, "bad.json")
+        with open(path, "w") as f:
+            json.dump({"foo": "bar"}, f)
+
+        cfg_patches = _patch_config(tmp_dir)
+        with cfg_patches[0], cfg_patches[1], pytest.raises(SystemExit, match="1"):
+            main([path])
+        err = capsys.readouterr().err
+        assert "Error" in err
+
+    def test_empty_tasks(self, tmp_dir, capsys):
+        path = os.path.join(tmp_dir, "empty.json")
+        with open(path, "w") as f:
+            json.dump([], f)
+
+        cfg_patches = _patch_config(tmp_dir)
+        with cfg_patches[0], cfg_patches[1], pytest.raises(SystemExit, match="1"):
+            main([path])
+        err = capsys.readouterr().err
+        assert "No download tasks" in err
+
+    def test_config_resolve_error(self, tmp_dir, capsys):
+        path = os.path.join(tmp_dir, "requests.json")
+        with open(path, "w") as f:
+            json.dump([{"dataset": "ds", "request": {}, "target": "out.grib"}], f)
+
+        with (
+            patch(
+                "cdsswarm.config.resolve_settings", side_effect=ValueError("bad config")
+            ),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            main([path])
+        err = capsys.readouterr().err
+        assert "Config error" in err
+
+    def test_no_skip_flag(self, tmp_dir, capsys):
+        path = os.path.join(tmp_dir, "requests.json")
+        with open(path, "w") as f:
+            json.dump([{"dataset": "ds", "request": {}, "target": "out.grib"}], f)
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path, "--no-skip", "--dry-run"])
+
+
+class TestRunScript:
+    @patch("cdsswarm.cli.SwarmDownloader")
+    def test_basic_run(self, mock_cls):
+        tasks = [Task("ds", {}, "out.grib")]
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = [Result(task=tasks[0], success=True)]
+        mock_cls.return_value = mock_instance
+
+        result = _run_script(tasks, num_workers=2, skip_existing=True)
+
+        mock_cls.assert_called_once()
+        call_kwargs = mock_cls.call_args[1]
+        assert call_kwargs["num_workers"] == 2
+        assert call_kwargs["skip_existing"] is True
+        mock_instance.run.assert_called_once()
+        assert result is not None
+
+    @patch("cdsswarm.cli.SwarmDownloader")
+    def test_with_log_file(self, mock_cls):
+        from cdsswarm.adapters import LoggingAdapter
+
+        tasks = [Task("ds", {}, "out.grib")]
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = [Result(task=tasks[0], success=True)]
+        mock_cls.return_value = mock_instance
+
+        log_file = io.StringIO()
+        _run_script(tasks, num_workers=1, skip_existing=False, log_file=log_file)
+
+        # The adapter arg should be a LoggingAdapter when log_file is provided
+        call_kwargs = mock_cls.call_args[1]
+        assert isinstance(call_kwargs["adapter"], LoggingAdapter)
+
+
+class TestMainDownloadFlow:
+    def _write_tasks(self, tmp_dir):
+        path = os.path.join(tmp_dir, "requests.json")
+        with open(path, "w") as f:
+            json.dump([{"dataset": "ds", "request": {}, "target": "out.grib"}], f)
+        return path
+
+    def test_script_success_exits_0(self, tmp_dir, capsys):
+        path = self._write_tasks(tmp_dir)
+        task = Task("ds", {}, "out.grib")
+        results = [Result(task=task, success=True, start_time=100.0, end_time=200.0)]
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", return_value=results),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path])
+
+        out = capsys.readouterr().out
+        assert "Summary" in out
+
+    def test_script_failure_exits_1(self, tmp_dir, capsys):
+        path = self._write_tasks(tmp_dir)
+        task = Task("ds", {}, "out.grib")
+        results = [Result(task=task, success=False, error="timeout")]
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", return_value=results),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            main([path])
+
+    def test_none_results_exits_1(self, tmp_dir):
+        path = self._write_tasks(tmp_dir)
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", return_value=None),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            main([path])
+
+    def test_export_summary_called(self, tmp_dir, capsys):
+        path = self._write_tasks(tmp_dir)
+        task = Task("ds", {}, "out.grib")
+        results = [Result(task=task, success=True, start_time=100.0, end_time=200.0)]
+        summary_file = os.path.join(tmp_dir, "report.json")
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", return_value=results),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path, "--summary", summary_file])
+
+        assert os.path.isfile(summary_file)
+        with open(summary_file) as f:
+            data = json.load(f)
+        assert data["totals"]["tasks_total"] == 1
+
+    def test_log_file_closed(self, tmp_dir):
+        path = self._write_tasks(tmp_dir)
+        task = Task("ds", {}, "out.grib")
+        results = [Result(task=task, success=True, start_time=100.0, end_time=200.0)]
+        log_path = os.path.join(tmp_dir, "run.log")
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", return_value=results),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path, "--log", log_path])
+
+        # Log file should exist and be closed (writing should succeed normally)
+        assert os.path.isfile(log_path)

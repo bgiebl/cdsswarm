@@ -3,7 +3,10 @@
 from unittest.mock import MagicMock, patch
 
 from cdsswarm._cds_utils import (
+    _dict_key,
+    _scan_jobs,
     cancel_cds_request,
+    find_reusable_jobs,
     install_progress_router,
     normalize_request,
     parse_cds_status,
@@ -204,3 +207,128 @@ class TestInstallProgressRouter:
                 sys.modules["tqdm"] = tqdm_mod
             else:
                 del sys.modules["tqdm"]
+
+
+class TestFindReusableJobs:
+    def test_old_client_returns_empty(self):
+        """Old-style client (no .client attr) returns empty dict."""
+        client = MagicMock(spec=["url", "session"])
+        tasks = [MagicMock(dataset="ds", request={"year": "2024"}, target="out.grib")]
+        result = find_reusable_jobs(client, tasks)
+        assert result == {}
+
+    def test_scan_jobs_api_failure(self):
+        """get_jobs() raising does not crash, reuse_map stays empty."""
+        inner = MagicMock()
+        inner.get_jobs.side_effect = RuntimeError("API error")
+        reuse_map = {}
+        _scan_jobs(inner, "successful", 200, {"ds"}, {}, reuse_map)
+        assert reuse_map == {}
+
+    def test_scan_jobs_matches_task(self):
+        """Job with matching processID and request populates reuse_map."""
+        norm = normalize_request({"year": "2024", "variable": "temp"})
+        key = ("ds", _dict_key(norm))
+        needed = {key: ["out.grib"]}
+
+        job_response = MagicMock()
+        job_response._json_dict = {"jobs": [{"processID": "ds", "jobID": "job-abc"}]}
+
+        remote = MagicMock()
+        remote.request = {"year": "2024", "variable": "temp"}
+
+        inner = MagicMock()
+        inner.get_jobs.return_value = job_response
+        inner.get_remote.return_value = remote
+
+        reuse_map = {}
+        _scan_jobs(inner, "successful", 200, {"ds"}, needed, reuse_map)
+
+        assert reuse_map == {"out.grib": "job-abc"}
+        assert key not in needed  # consumed
+
+    def test_scan_jobs_skips_wrong_dataset(self):
+        """Job with non-matching processID is skipped."""
+        norm = normalize_request({"year": "2024"})
+        key = ("ds", _dict_key(norm))
+        needed = {key: ["out.grib"]}
+
+        job_response = MagicMock()
+        job_response._json_dict = {
+            "jobs": [{"processID": "other-ds", "jobID": "job-abc"}]
+        }
+
+        inner = MagicMock()
+        inner.get_jobs.return_value = job_response
+
+        reuse_map = {}
+        _scan_jobs(inner, "successful", 200, {"ds"}, needed, reuse_map)
+
+        assert reuse_map == {}
+        assert key in needed  # not consumed
+
+    def test_scan_jobs_get_remote_failure(self):
+        """get_remote() raising for one job skips it, no crash."""
+        norm = normalize_request({"year": "2024"})
+        key = ("ds", _dict_key(norm))
+        needed = {key: ["out.grib"]}
+
+        job_response = MagicMock()
+        job_response._json_dict = {"jobs": [{"processID": "ds", "jobID": "job-abc"}]}
+
+        inner = MagicMock()
+        inner.get_jobs.return_value = job_response
+        inner.get_remote.side_effect = RuntimeError("not found")
+
+        reuse_map = {}
+        _scan_jobs(inner, "successful", 200, {"ds"}, needed, reuse_map)
+
+        assert reuse_map == {}
+
+    def test_scan_jobs_skips_no_job_id(self):
+        """Job dict with no jobID is skipped."""
+        norm = normalize_request({"year": "2024"})
+        key = ("ds", _dict_key(norm))
+        needed = {key: ["out.grib"]}
+
+        job_response = MagicMock()
+        job_response._json_dict = {
+            "jobs": [{"processID": "ds"}]  # no jobID
+        }
+
+        inner = MagicMock()
+        inner.get_jobs.return_value = job_response
+
+        reuse_map = {}
+        _scan_jobs(inner, "successful", 200, {"ds"}, needed, reuse_map)
+
+        assert reuse_map == {}
+
+
+class TestCancelImportError:
+    def test_no_ecmwf_datastores_falls_back_to_old_style(self):
+        """When ecmwf.datastores is not importable, falls through to old-style DELETE."""
+        import sys
+
+        client = MagicMock(spec=["url", "session", "verify"])
+        client.url = "https://cds.example.com/api/v2"
+        client.verify = True
+        mock_response = MagicMock()
+        client.session.delete.return_value = mock_response
+
+        with patch.dict(
+            sys.modules,
+            {
+                "ecmwf": None,
+                "ecmwf.datastores": None,
+                "ecmwf.datastores.config": None,
+            },
+        ):
+            cancel_cds_request(client, "task-999")
+
+        client.session.delete.assert_called_once_with(
+            "https://cds.example.com/api/v2/tasks/task-999",
+            verify=True,
+            timeout=10,
+        )
+        mock_response.raise_for_status.assert_called_once()

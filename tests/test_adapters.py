@@ -1,9 +1,83 @@
 """Tests for output adapters."""
 
+import io
 import threading
+from unittest.mock import MagicMock, patch
 
-from cdsswarm.adapters import PlainTextAdapter
+from cdsswarm.adapters import LoggingAdapter, OutputAdapter, PlainTextAdapter
 from cdsswarm.core import Task
+
+
+class _NoOpAdapter(OutputAdapter):
+    """Minimal concrete adapter for testing default method behavior."""
+
+    def on_task_started(self, worker_id, task):
+        pass
+
+    def on_task_message(self, worker_id, message):
+        pass
+
+    def on_task_completed(self, worker_id, task, success, error=""):
+        pass
+
+    def on_progress_update(self, completed, total, skipped):
+        pass
+
+    def on_global_message(self, message):
+        pass
+
+
+class TestOutputAdapterDefaults:
+    def test_on_task_request_id(self):
+        adapter = _NoOpAdapter()
+        adapter.on_task_request_id(0, "abc-123")
+
+    def test_on_task_progress(self):
+        adapter = _NoOpAdapter()
+        adapter.on_task_progress(0, 1024, 4096)
+
+    def test_on_task_cancelled(self):
+        adapter = _NoOpAdapter()
+        adapter.on_task_cancelled(0)
+
+    def test_on_task_server_progress(self):
+        adapter = _NoOpAdapter()
+        adapter.on_task_server_progress(0, 50)
+
+    def test_on_task_file_size(self):
+        adapter = _NoOpAdapter()
+        adapter.on_task_file_size(0, 1024 * 1024)
+
+    def test_on_task_checksum_result_returns_continue(self):
+        adapter = _NoOpAdapter()
+        result = adapter.on_task_checksum_result(0, True, "abc123")
+        assert result == "continue"
+
+    def test_on_task_checksum_result_mismatch_returns_continue(self):
+        adapter = _NoOpAdapter()
+        result = adapter.on_task_checksum_result(0, False, "abc123")
+        assert result == "continue"
+
+    def test_on_task_server_timestamps(self):
+        adapter = _NoOpAdapter()
+        adapter.on_task_server_timestamps(0, "2024-01-01", "2024-01-02", "2024-01-03")
+
+    def test_on_task_dataset_title(self):
+        adapter = _NoOpAdapter()
+        adapter.on_task_dataset_title(0, "ERA5 hourly data")
+
+    def test_on_task_request_labels(self):
+        adapter = _NoOpAdapter()
+        adapter.on_task_request_labels(0, {"year": "2024"})
+
+    def test_on_qos_update(self):
+        adapter = _NoOpAdapter()
+        adapter.on_qos_update(100, 20, 20)
+
+    def test_on_tasks_initialized(self):
+        adapter = _NoOpAdapter()
+        tasks = [Task("ds", {}, "file.grib")]
+        adapter.on_tasks_initialized(tasks, set())
 
 
 class TestPlainTextAdapter:
@@ -305,3 +379,140 @@ class TestPlainTextAdapter:
         # "accepted" should appear exactly once due to deduplication
         accepted_msgs = [m for m in messages if "accepted" in m]
         assert len(accepted_msgs) == 1
+
+    def test_progress_zero_total_silent(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append)
+        adapter.on_task_progress(0, 0, 0)
+        assert len(messages) == 0
+
+    def test_global_message_all_completed_with_color(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append, use_color=True)
+        adapter.on_global_message("All downloads completed successfully.")
+        assert len(messages) == 1
+        assert "\033[32m" in messages[0]
+
+    def test_completed_with_color(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append, use_color=True)
+        adapter.on_progress_update(1, 5, 0)
+        task = Task("ds", {}, "file.grib")
+        adapter.on_task_completed(0, task, success=True)
+        assert any("\033[32m" in m for m in messages)
+
+    def test_status_text_unknown_status_no_description(self):
+        adapter = PlainTextAdapter(use_color=False)
+        result = adapter._status_text("unknown_status")
+        assert result == "unknown_status"
+        assert "—" not in result
+
+    def test_checksum_interactive_continue(self):
+        messages = []
+        adapter = PlainTextAdapter(
+            write_fn=messages.append, use_color=False, interactive=True
+        )
+        with patch("builtins.input", return_value="c"):
+            result = adapter.on_task_checksum_result(0, False, "abc123")
+        assert result == "continue"
+
+    def test_checksum_interactive_retry(self):
+        messages = []
+        adapter = PlainTextAdapter(
+            write_fn=messages.append, use_color=False, interactive=True
+        )
+        with patch("builtins.input", return_value="retry"):
+            result = adapter.on_task_checksum_result(0, False, "abc123")
+        assert result == "retry"
+
+    def test_checksum_interactive_eof(self):
+        messages = []
+        adapter = PlainTextAdapter(
+            write_fn=messages.append, use_color=False, interactive=True
+        )
+        with patch("builtins.input", side_effect=EOFError):
+            result = adapter.on_task_checksum_result(0, False, "abc123")
+        assert result == "continue"
+
+    def test_checksum_interactive_invalid_then_valid(self):
+        messages = []
+        adapter = PlainTextAdapter(
+            write_fn=messages.append, use_color=False, interactive=True
+        )
+        with patch("builtins.input", side_effect=["x", "invalid", "r"]):
+            result = adapter.on_task_checksum_result(0, False, "abc123")
+        assert result == "retry"
+
+
+class TestLoggingAdapter:
+    def _make_adapter(self):
+        log_file = io.StringIO()
+        inner = MagicMock(spec=PlainTextAdapter)
+        inner.on_task_checksum_result.return_value = "continue"
+        adapter = LoggingAdapter(inner, log_file)
+        return adapter, inner, log_file
+
+    def test_on_tasks_initialized(self):
+        adapter, inner, log_file = self._make_adapter()
+        tasks = [Task("ds", {}, "file.grib")]
+        adapter.on_tasks_initialized(tasks, {"skipped.grib"})
+        assert "tasks initialized" in log_file.getvalue()
+        assert "1 total" in log_file.getvalue()
+        assert "1 cached" in log_file.getvalue()
+        inner.on_tasks_initialized.assert_called_once_with(tasks, {"skipped.grib"})
+
+    def test_on_task_cancelled(self):
+        adapter, inner, log_file = self._make_adapter()
+        adapter.on_task_cancelled(0)
+        assert "cancelled" in log_file.getvalue()
+        inner.on_task_cancelled.assert_called_once_with(0)
+
+    def test_on_task_server_progress(self):
+        adapter, inner, log_file = self._make_adapter()
+        adapter.on_task_server_progress(0, 75)
+        assert "server progress: 75%" in log_file.getvalue()
+        inner.on_task_server_progress.assert_called_once_with(0, 75)
+
+    def test_on_task_file_size(self):
+        adapter, inner, log_file = self._make_adapter()
+        adapter.on_task_file_size(0, 1024)
+        assert "file size: 1024" in log_file.getvalue()
+        inner.on_task_file_size.assert_called_once_with(0, 1024)
+
+    def test_on_task_checksum_result(self):
+        adapter, inner, log_file = self._make_adapter()
+        result = adapter.on_task_checksum_result(0, True, "abc123")
+        assert "checksum passed" in log_file.getvalue()
+        assert result == "continue"
+        inner.on_task_checksum_result.assert_called_once_with(0, True, "abc123")
+
+    def test_on_task_server_timestamps(self):
+        adapter, inner, log_file = self._make_adapter()
+        adapter.on_task_server_timestamps(0, "2024-01-01", "2024-01-02", "2024-01-03")
+        log = log_file.getvalue()
+        assert "server timestamps" in log
+        assert "created=2024-01-01" in log
+        inner.on_task_server_timestamps.assert_called_once_with(
+            0, "2024-01-01", "2024-01-02", "2024-01-03"
+        )
+
+    def test_on_task_dataset_title(self):
+        adapter, inner, log_file = self._make_adapter()
+        adapter.on_task_dataset_title(0, "ERA5 hourly")
+        assert "dataset: ERA5 hourly" in log_file.getvalue()
+        inner.on_task_dataset_title.assert_called_once_with(0, "ERA5 hourly")
+
+    def test_on_task_request_labels(self):
+        adapter, inner, log_file = self._make_adapter()
+        labels = {"year": "2024"}
+        adapter.on_task_request_labels(0, labels)
+        assert "labels:" in log_file.getvalue()
+        inner.on_task_request_labels.assert_called_once_with(0, labels)
+
+    def test_on_qos_update(self):
+        adapter, inner, log_file = self._make_adapter()
+        adapter.on_qos_update(100, 20, 20)
+        log = log_file.getvalue()
+        assert "qos:" in log
+        assert "queued=100" in log
+        inner.on_qos_update.assert_called_once_with(100, 20, 20)
