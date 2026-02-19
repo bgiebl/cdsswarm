@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   viewBox="0 0 128 128"
+   width="512"
+   height="512"
+   version="1.1"
+   id="svg30"
+   sodipodi:docname="logo.svg"
+   inkscape:version="1.2.2 (b0a8486541, 2022-12-01)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs34" />
+  <sodipodi:namedview
+     id="namedview32"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     showgrid="false"
+     inkscape:zoom="1.2139587"
+     inkscape:cx="120.26768"
+     inkscape:cy="225.70784"
+     inkscape:window-width="1920"
+     inkscape:window-height="1007"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg30" />
+  <!-- Background -->
+  <rect
+     width="128"
+     height="128"
+     rx="24"
+     fill="#1B2838"
+     id="rect2"
+     style="fill:#2a7fff" />
+  <!-- Bee body (vertical, pointing down = download direction) -->
+  <ellipse
+     cx="63.710037"
+     cy="71.265724"
+     rx="20"
+     ry="28"
+     fill="#ffd93d"
+     id="ellipse4" />
+  <!-- Stripes -->
+  <rect
+     x="43.710037"
+     y="59.265724"
+     width="40"
+     height="7"
+     rx="3"
+     fill="#1b2838"
+     opacity="0.85"
+     id="rect6" />
+  <rect
+     x="45.710037"
+     y="73.265724"
+     width="36"
+     height="7"
+     rx="3"
+     fill="#1b2838"
+     opacity="0.85"
+     id="rect8" />
+  <!-- Head (top) -->
+  <circle
+     cx="63.710037"
+     cy="37.265724"
+     r="14"
+     fill="#2a2a2a"
+     id="circle10" />
+  <!-- Eyes -->
+  <circle
+     cx="56.710037"
+     cy="34.265724"
+     r="3.5"
+     fill="#ffd93d"
+     id="circle12" />
+  <circle
+     cx="70.710037"
+     cy="34.265724"
+     r="3.5"
+     fill="#ffd93d"
+     id="circle14" />
+  <!-- Antennae -->
+  <line
+     x1="54.710037"
+     y1="26.265724"
+     x2="43.710037"
+     y2="16.265724"
+     stroke="#2a2a2a"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="line16" />
+  <line
+     x1="72.710037"
+     y1="26.265724"
+     x2="83.710037"
+     y2="16.265724"
+     stroke="#2a2a2a"
+     stroke-width="3"
+     stroke-linecap="round"
+     id="line18" />
+  <circle
+     cx="43.710037"
+     cy="16.265724"
+     r="2.5"
+     fill="#2a2a2a"
+     id="circle20" />
+  <circle
+     cx="83.710037"
+     cy="16.265724"
+     r="2.5"
+     fill="#2a2a2a"
+     id="circle22" />
+  <!-- Wings forming downward arrow / chevron -->
+  <path
+     d="m 41.710035,55.265725 -30,-14 q -3.9999996,-2 -1.9999996,2 l 27.9999996,38 q 2,4 4,0 z"
+     fill="#ffffff"
+     opacity="0.55"
+     id="path24" />
+  <path
+     d="m 85.710035,55.265725 30.000005,-14 q 4,-2 2,2 l -28.000005,38 q -2,4 -4,0 z"
+     fill="#ffffff"
+     opacity="0.55"
+     id="path26" />
+  <!-- Stinger / arrow tip pointing down -->
+  <polygon
+     points="46,78 54,78 54,72 74,72 74,78 82,78 64,104 "
+     fill="#f5a623"
+     id="polygon28"
+     transform="translate(-0.28996456,13.265725)" />
+</svg>
