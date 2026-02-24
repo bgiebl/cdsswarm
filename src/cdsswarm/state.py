@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 
@@ -106,7 +107,7 @@ class SessionState:
     def save(self, path: str) -> None:
         """Atomic write: tmp + fsync + replace."""
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp_path = path + ".tmp"
+        tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
         data = {
             "version": self.version,
             "request_file": self.request_file,
