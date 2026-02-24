@@ -224,7 +224,7 @@ _STATUS_URL = "https://apps.ecmwf.int/status/status"
 
 
 def fetch_live_stats(url: str = _LIVE_URL) -> ServerStats:
-    """Scrape /live page for queue_status from __NEXT_DATA__."""
+    """Scrape /live page for statistics from __NEXT_DATA__."""
     import json
 
     resp = http_requests.get(url, timeout=15)
@@ -233,14 +233,20 @@ def fetch_live_stats(url: str = _LIVE_URL) -> ServerStats:
     if not match:
         raise ValueError("__NEXT_DATA__ not found in /live page")
     data = json.loads(match.group(1))
-    # Navigate: props.pageProps.queue_status
     props = data.get("props", {})
     page_props = props.get("pageProps", {})
-    qs = page_props.get("queue_status", {})
+    # Data lives in statisticData (current) or queue_status (legacy)
+    sd = page_props.get("statisticData") or page_props.get("queue_status") or {}
     return ServerStats(
-        server_running=int(qs.get("running_requests_real_time", 0) or 0),
-        server_queued=int(qs.get("queued_requests_real_time", 0) or 0),
-        running_users=int(qs.get("running_users", 0) or 0),
+        server_running=int(
+            sd.get("running_requests", 0)
+            or sd.get("running_requests_real_time", 0)
+            or 0
+        ),
+        server_queued=int(
+            sd.get("queued_requests", 0) or sd.get("queued_requests_real_time", 0) or 0
+        ),
+        running_users=int(sd.get("running_users", 0) or 0),
     )
 
 
@@ -249,7 +255,11 @@ def fetch_system_status(url: str = _STATUS_URL) -> str:
     resp = http_requests.get(url, timeout=15)
     resp.raise_for_status()
     data = resp.json()
-    for node in data:
+    # Current format: {"nodes": [{"node": {"Title": ..., "Status": ...}}, ...]}
+    # Legacy format: [{"Title": ..., "Status": ...}, ...]
+    nodes = data.get("nodes", data) if isinstance(data, dict) else data
+    for entry in nodes:
+        node = entry.get("node", entry) if isinstance(entry, dict) else {}
         if node.get("Title") == "Data Stores":
             return node.get("Status", "")
     return ""
@@ -292,18 +302,24 @@ class LiveScraper:
 
     def _poll_once(self):
         stats = ServerStats()
+        got_data = False
         try:
             live = fetch_live_stats()
             stats.server_running = live.server_running
             stats.server_queued = live.server_queued
             stats.running_users = live.running_users
+            got_data = True
         except Exception:
             log.debug("Failed to fetch /live stats", exc_info=True)
 
         try:
             stats.system_status = fetch_system_status()
+            got_data = True
         except Exception:
             log.debug("Failed to fetch system status", exc_info=True)
+
+        if not got_data:
+            return
 
         current = (
             stats.server_running,

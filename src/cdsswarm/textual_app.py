@@ -444,7 +444,7 @@ class MeterBar(Static):
         parts = []
 
         # Server-wide stats
-        if server_queued > 0 or server_running > 0:
+        if server_queued > 0 or server_running > 0 or system_status:
             dot = ""
             if system_status:
                 status_lower = system_status.lower()
