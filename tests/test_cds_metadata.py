@@ -1,9 +1,6 @@
 """Tests for the CDS metadata module."""
 
-import hashlib
-import os
 import sys
-import tempfile
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -16,12 +13,7 @@ from cdsswarm._cds_metadata import (
     QoSData,
     _parse_job_metadata,
     _parse_qos,
-    compute_file_hash,
-    compute_md5,
     fetch_job_metadata,
-    fetch_job_results,
-    parse_multihash,
-    verify_checksum,
 )
 
 
@@ -44,7 +36,6 @@ class TestParsJobMetadata:
                     "asset": {
                         "value": {
                             "file:size": 95418,
-                            "file:checksum": "abc123",
                         }
                     }
                 },
@@ -59,7 +50,6 @@ class TestParsJobMetadata:
         assert meta.dataset_title == "ERA5 hourly data on single levels"
         assert meta.request_labels == {"Variable": "2m temperature", "Year": "2024"}
         assert meta.file_size == 95418
-        assert meta.file_checksum == "abc123"
 
     def test_empty_metadata(self):
         data = {"jobID": "test-456"}
@@ -70,7 +60,6 @@ class TestParsJobMetadata:
         assert meta.dataset_title == ""
         assert meta.request_labels == {}
         assert meta.file_size == 0
-        assert meta.file_checksum == ""
 
     def test_null_values(self):
         data = {
@@ -113,6 +102,29 @@ class TestParseQos:
         assert qos.running == 400
         assert qos.limit == 400
 
+    def test_valid_qos_user_key(self):
+        """New API format uses 'user' instead of 'limit'."""
+        data = {
+            "metadata": {
+                "qos": {
+                    "status": {
+                        "user": [
+                            {
+                                "info": "Max per-user requests is 1",
+                                "queued": 6,
+                                "running": 1,
+                                "conclusion": "1",
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        qos = _parse_qos(data)
+        assert qos.queued == 6
+        assert qos.running == 1
+        assert qos.limit == 1
+
     def test_empty_qos(self):
         data = {"metadata": {"qos": {"status": {}}}}
         qos = _parse_qos(data)
@@ -145,121 +157,6 @@ class TestParseQos:
         assert qos.queued == 10
         assert qos.running == 5
         assert qos.limit == 0
-
-
-class TestComputeMd5:
-    def test_known_hash(self):
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            f.write(b"hello world")
-            f.flush()
-            path = f.name
-        try:
-            result = compute_md5(path)
-            expected = hashlib.md5(b"hello world").hexdigest()
-            assert result == expected
-        finally:
-            os.unlink(path)
-
-    def test_empty_file(self):
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            path = f.name
-        try:
-            result = compute_md5(path)
-            expected = hashlib.md5(b"").hexdigest()
-            assert result == expected
-        finally:
-            os.unlink(path)
-
-
-class TestParseMultihash:
-    def test_sha256(self):
-        digest = hashlib.sha256(b"hello").digest()
-        mh_hex = "1220" + digest.hex()
-        algo, parsed_digest = parse_multihash(mh_hex)
-        assert algo == "sha256"
-        assert parsed_digest == digest
-
-    def test_sha1(self):
-        digest = hashlib.sha1(b"hello").digest()
-        mh_hex = "1114" + digest.hex()
-        algo, parsed_digest = parse_multihash(mh_hex)
-        assert algo == "sha1"
-        assert parsed_digest == digest
-
-    def test_md5_varint(self):
-        """MD5 code 0xd5 requires two-byte varint encoding."""
-        digest = hashlib.md5(b"hello").digest()
-        # 0xd5 as unsigned varint = bytes d5 01; length 16 = 10
-        mh_hex = "d50110" + digest.hex()
-        algo, parsed_digest = parse_multihash(mh_hex)
-        assert algo == "md5"
-        assert parsed_digest == digest
-
-    def test_unsupported_code(self):
-        import pytest
-
-        with pytest.raises(ValueError, match="unsupported"):
-            parse_multihash("ff0400000000")
-
-
-class TestComputeFileHash:
-    def test_sha256(self):
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            f.write(b"test data")
-            path = f.name
-        try:
-            result = compute_file_hash(path, "sha256")
-            assert result == hashlib.sha256(b"test data").digest()
-        finally:
-            os.unlink(path)
-
-
-class TestVerifyChecksum:
-    def test_pass_sha256_multihash(self):
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            f.write(b"test data")
-            f.flush()
-            path = f.name
-        try:
-            digest = hashlib.sha256(b"test data").digest()
-            expected = "1220" + digest.hex()
-            assert verify_checksum(path, expected) is True
-        finally:
-            os.unlink(path)
-
-    def test_fail_sha256_multihash(self):
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            f.write(b"test data")
-            f.flush()
-            path = f.name
-        try:
-            wrong_digest = hashlib.sha256(b"other data").digest()
-            expected = "1220" + wrong_digest.hex()
-            assert verify_checksum(path, expected) is False
-        finally:
-            os.unlink(path)
-
-    def test_fallback_bare_md5(self):
-        """Falls back to bare MD5 hex for non-multihash strings."""
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            f.write(b"test data")
-            f.flush()
-            path = f.name
-        try:
-            expected = hashlib.md5(b"test data").hexdigest()
-            assert verify_checksum(path, expected) is True
-        finally:
-            os.unlink(path)
-
-    def test_fail_bare_md5(self):
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            f.write(b"test data")
-            f.flush()
-            path = f.name
-        try:
-            assert verify_checksum(path, "wrong_hash") is False
-        finally:
-            os.unlink(path)
 
 
 class TestFetchJobMetadata:
@@ -310,43 +207,6 @@ class TestFetchJobMetadata:
         assert qos is not None
         assert qos.queued == 100
         assert meta.request_labels == {"Variable": "Temperature"}
-
-
-class TestFetchJobResults:
-    @patch("cdsswarm._cds_metadata.http_requests")
-    def test_parses_results(self, mock_requests):
-        inner = MagicMock()
-        inner.url = "https://cds.example.com/api"
-        inner.verify = True
-        inner._get_headers.return_value = {}
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "asset": {
-                "value": {
-                    "file:size": 95418,
-                    "file:checksum": "abc123def",
-                }
-            }
-        }
-        mock_requests.get.return_value = mock_resp
-
-        size, checksum = fetch_job_results(inner, "job-id")
-        assert size == 95418
-        assert checksum == "abc123def"
-
-    @patch("cdsswarm._cds_metadata.http_requests")
-    def test_missing_fields(self, mock_requests):
-        inner = MagicMock()
-        inner.url = "https://cds.example.com/api"
-        inner.verify = True
-        inner._get_headers.return_value = {}
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {}
-        mock_requests.get.return_value = mock_resp
-
-        size, checksum = fetch_job_results(inner, "job-id")
-        assert size == 0
-        assert checksum == ""
 
 
 class TestMetadataPoller:
@@ -581,27 +441,5 @@ class TestFetchImportFallback:
             with patch("cdsswarm._cds_metadata.http_requests") as mock_req:
                 mock_req.get.return_value = mock_resp
                 meta, qos = fetch_job_metadata(inner, "test-id")
-            url = mock_req.get.call_args[0][0]
-            assert "/v1/" in url
-
-    def test_fetch_job_results_no_ecmwf(self):
-        """When ecmwf.datastores is not importable, api_version defaults to v1."""
-        with patch.dict(
-            sys.modules,
-            {
-                "ecmwf": None,
-                "ecmwf.datastores": None,
-                "ecmwf.datastores.config": None,
-            },
-        ):
-            inner = MagicMock()
-            inner.url = "https://cds.example.com/api"
-            inner.verify = True
-            inner._get_headers.return_value = {}
-            mock_resp = MagicMock()
-            mock_resp.json.return_value = {}
-            with patch("cdsswarm._cds_metadata.http_requests") as mock_req:
-                mock_req.get.return_value = mock_resp
-                size, checksum = fetch_job_results(inner, "test-id")
             url = mock_req.get.call_args[0][0]
             assert "/v1/" in url

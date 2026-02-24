@@ -12,12 +12,10 @@ from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
 from textual.message import Message
-from textual.screen import ModalScreen, Screen
+from textual.screen import Screen
 from textual.theme import Theme
 from textual.widgets import (
-    Button,
     DataTable,
     RichLog,
     Static,
@@ -79,7 +77,6 @@ class WorkerData:
     logs: deque = field(default_factory=lambda: deque(maxlen=100))
     server_progress: int | None = None
     file_size: int | None = None
-    checksum: bool | None = None
     server_created: str | None = None
     server_started: str | None = None
     server_finished: str | None = None
@@ -101,7 +98,6 @@ class WorkerData:
         self.logs.clear()
         self.server_progress = None
         self.file_size = None
-        self.checksum = None
         self.server_created = None
         self.server_started = None
         self.server_finished = None
@@ -176,9 +172,11 @@ class WorkerProgress(Message):
 
 
 class WorkerFinished(Message):
-    def __init__(self, worker_id: int) -> None:
+    def __init__(self, worker_id: int, success: bool = True, error: str = "") -> None:
         super().__init__()
         self.worker_id = worker_id
+        self.success = success
+        self.error = error
 
 
 class WorkerServerProgress(Message):
@@ -193,13 +191,6 @@ class WorkerFileSize(Message):
         super().__init__()
         self.worker_id = worker_id
         self.file_size = file_size
-
-
-class WorkerChecksum(Message):
-    def __init__(self, worker_id: int, passed: bool) -> None:
-        super().__init__()
-        self.worker_id = worker_id
-        self.passed = passed
 
 
 class WorkerServerTimestamps(Message):
@@ -277,21 +268,6 @@ class WorkerCancelled(Message):
         self.worker_id = worker_id
 
 
-class ShowChecksumDialog(Message):
-    def __init__(
-        self,
-        worker_id: int,
-        expected: str,
-        result_event: threading.Event,
-        result_holder: list,
-    ) -> None:
-        super().__init__()
-        self.worker_id = worker_id
-        self.expected = expected
-        self.result_event = result_event
-        self.result_holder = result_holder
-
-
 # ---------------------------------------------------------------------------
 # Status styling
 # ---------------------------------------------------------------------------
@@ -335,16 +311,11 @@ class WorkerInfoPanel(Static):
         ds = w.dataset_title if w.dataset_title else (w.dataset or "\u2014")
         req_id = w.request_id or "\u2014"
 
-        # Checksum or queue wait
+        # Queue wait
         left_info = ""
-        if w.checksum is not None:
-            left_info = (
-                "Checksum: OK \u2713" if w.checksum else "Checksum: MISMATCH \u2717"
-            )
-        else:
-            queue_wait = self._format_queue_wait(w)
-            if queue_wait:
-                left_info = f"Queued: {queue_wait}"
+        queue_wait = self._format_queue_wait(w)
+        if queue_wait:
+            left_info = f"Queued: {queue_wait}"
 
         if left_info:
             row8 = f"{left_info} \u2502 Request ID: {req_id}"
@@ -421,6 +392,8 @@ class FilesInfoPanel(Static):
             f"{dest} \u2502 {f.dataset}",
             f"[dim]{param_str}[/]",
         ]
+        if f.error:
+            lines.append(f"[bold red]Error: {f.error}[/]")
         return "\n".join(lines)
 
 
@@ -591,70 +564,6 @@ class ParamsScreen(Screen):
         )
 
 
-class ChecksumScreen(ModalScreen[str]):
-    """Modal dialog for checksum mismatch."""
-
-    BINDINGS = [
-        Binding("c", "continue_download", "Continue"),
-        Binding("r", "retry_download", "Retry"),
-    ]
-
-    def __init__(
-        self, worker_id: int, filename: str, expected: str, target: str
-    ) -> None:
-        super().__init__()
-        self.worker_id = worker_id
-        self.filename = filename
-        self.expected = expected
-        self.target_path = target
-
-    def compose(self) -> ComposeResult:
-        actual = self._compute_actual()
-        with Vertical(id="checksum-dialog"):
-            yield Static("CHECKSUM MISMATCH", classes="checksum-title")
-            yield Static(
-                f"Worker {self.worker_id}: {self.filename}\n"
-                f"Expected: {self.expected}\n"
-                f"Got:      {actual}",
-                classes="checksum-info",
-            )
-            with Horizontal(classes="checksum-buttons"):
-                yield Button(
-                    "Retry (r)",
-                    id="checksum-retry",
-                    variant="error",
-                )
-                yield Button(
-                    "Continue (c)",
-                    id="checksum-continue",
-                )
-
-    def _compute_actual(self) -> str:
-        try:
-            from ._cds_metadata import compute_file_hash, parse_multihash
-
-            algo, _ = parse_multihash(self.expected)
-            return (
-                compute_file_hash(self.target_path, algo).hex()
-                if self.target_path
-                else "?"
-            )
-        except Exception:
-            return "?"
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "checksum-retry":
-            self.dismiss("retry")
-        elif event.button.id == "checksum-continue":
-            self.dismiss("continue")
-
-    def action_continue_download(self) -> None:
-        self.dismiss("continue")
-
-    def action_retry_download(self) -> None:
-        self.dismiss("retry")
-
-
 # ---------------------------------------------------------------------------
 # Worker table column keys
 # ---------------------------------------------------------------------------
@@ -801,32 +710,6 @@ class CdsswarmApp(App):
         height: 1;
         background: #000000;
         padding: 0 1;
-    }
-    ChecksumScreen {
-        align: center middle;
-    }
-    ChecksumScreen #checksum-dialog {
-        width: 64;
-        height: auto;
-        border: thick #ff4444;
-        background: #1a1a1a;
-        padding: 1 2;
-    }
-    ChecksumScreen .checksum-title {
-        text-style: bold;
-        color: #ff4444;
-        margin-bottom: 1;
-    }
-    ChecksumScreen .checksum-info {
-        margin-bottom: 1;
-    }
-    ChecksumScreen .checksum-buttons {
-        margin-top: 1;
-        height: auto;
-        width: 100%;
-    }
-    ChecksumScreen Button {
-        margin: 0 1;
     }
     """
 
@@ -977,7 +860,6 @@ class CdsswarmApp(App):
         w.logs.clear()
         w.server_progress = None
         w.file_size = None
-        w.checksum = None
         w.server_created = None
         w.server_started = None
         w.server_finished = None
@@ -1048,18 +930,27 @@ class CdsswarmApp(App):
         w.finish_time = time.time()
         wt = self.query_one("#worker-table", DataTable)
         elapsed = format_eta(w.finish_time - w.start_time) if w.start_time else "\u2014"
-        wt.update_cell(
-            str(msg.worker_id),
-            "Elapsed",
-            Text(f"{elapsed} \u2713", style="green"),
-        )
-        if w.dl_total > 0:
-            pct = int(w.dl_bytes * 100 / w.dl_total)
+        if msg.success:
             wt.update_cell(
                 str(msg.worker_id),
-                "DL %",
-                Text(f"{pct}% \u2713", style="green"),
+                "Elapsed",
+                Text(f"{elapsed} \u2713", style="green"),
             )
+            if w.dl_total > 0:
+                pct = int(w.dl_bytes * 100 / w.dl_total)
+                wt.update_cell(
+                    str(msg.worker_id),
+                    "DL %",
+                    Text(f"{pct}% \u2713", style="green"),
+                )
+        else:
+            wt.update_cell(
+                str(msg.worker_id),
+                "Elapsed",
+                Text(f"{elapsed} \u2717", style="red"),
+            )
+            if msg.error:
+                w.logs.append(f"FAILED: {msg.error}")
         self._update_worker_info()
 
     def on_worker_server_progress(self, msg: WorkerServerProgress) -> None:
@@ -1075,10 +966,6 @@ class CdsswarmApp(App):
             w.dl_total = msg.file_size
             wt = self.query_one("#worker-table", DataTable)
             wt.update_cell(str(msg.worker_id), "Size", format_size(msg.file_size))
-
-    def on_worker_checksum(self, msg: WorkerChecksum) -> None:
-        self.worker_data[msg.worker_id].checksum = msg.passed
-        self._update_worker_info()
 
     def on_worker_server_timestamps(self, msg: WorkerServerTimestamps) -> None:
         w = self.worker_data[msg.worker_id]
@@ -1180,23 +1067,6 @@ class CdsswarmApp(App):
             str(msg.worker_id),
             "Status",
             styled_status(WorkerStatus.CANCELLED),
-        )
-
-    def on_show_checksum_dialog(self, msg: ShowChecksumDialog) -> None:
-        w = self.worker_data[msg.worker_id]
-
-        def _on_dismiss(result: str) -> None:
-            msg.result_holder.append(result or "continue")
-            msg.result_event.set()
-
-        self.push_screen(
-            ChecksumScreen(
-                msg.worker_id,
-                w.filename,
-                msg.expected,
-                w.target,
-            ),
-            callback=_on_dismiss,
         )
 
     # -- DataTable cursor change -> update info panel --

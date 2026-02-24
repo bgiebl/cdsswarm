@@ -74,7 +74,6 @@ def main():
     active = {}
     task_idx = num_cached
     tasks_done = 0
-    checksum_fail_triggered = False
     results: list[Result] = []
 
     # Skipped tasks count as successful
@@ -157,18 +156,6 @@ def main():
                 adapter.on_task_progress(wid, state["dl_bytes"], state["size"])
 
                 if state["dl_bytes"] >= state["size"]:
-                    # Trigger one checksum mismatch on the 3rd completion
-                    warnings = []
-                    if not checksum_fail_triggered and tasks_done == 2:
-                        checksum_fail_triggered = True
-                        adapter.on_task_checksum_result(
-                            wid, False, "d41d8cd98f00b204e9800998ecf8427e"
-                        )
-                        warnings.append(
-                            "Checksum mismatch "
-                            "(expected d41d8cd98f00b204e9800998ecf8427e)"
-                        )
-
                     tasks_done += 1
                     adapter.on_progress_update(tasks_done, pending, num_cached)
                     failed = random.random() < 0.08
@@ -186,7 +173,7 @@ def main():
                             start_time=state["start_time"],
                             end_time=time.time(),
                             file_size=state["size"],
-                            warnings=warnings,
+                            warnings=[],
                         )
                     )
                     del active[wid]

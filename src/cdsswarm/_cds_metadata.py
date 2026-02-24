@@ -1,8 +1,7 @@
-"""CDS API metadata: job polling, QoS, checksums, and human-readable labels."""
+"""CDS API metadata: job polling, QoS, and human-readable labels."""
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -24,7 +23,6 @@ class JobMetadata:
     dataset_title: str = ""
     request_labels: dict = field(default_factory=dict)
     file_size: int = 0
-    file_checksum: str = ""
 
 
 @dataclass
@@ -81,35 +79,6 @@ def fetch_job_metadata(
     return meta, qos
 
 
-def fetch_job_results(inner, job_id: str) -> tuple[int, str]:
-    """Fetch file:size and file:checksum from the job results endpoint.
-
-    Returns:
-        Tuple of (file_size_bytes, checksum_md5). Either may be 0/"" if unavailable.
-    """
-    try:
-        from ecmwf.datastores import config as ds_config
-
-        api_version = getattr(ds_config, "SUPPORTED_API_VERSION", "v1")
-    except ImportError:
-        api_version = "v1"
-
-    url = f"{inner.url}/retrieve/{api_version}/jobs/{job_id}/results"
-    resp = http_requests.get(
-        url,
-        headers=inner._get_headers(),
-        verify=inner.verify,
-        timeout=15,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-
-    asset = data.get("asset", {}).get("value", {})
-    file_size = asset.get("file:size", 0)
-    file_checksum = asset.get("file:checksum", "")
-    return int(file_size), str(file_checksum)
-
-
 def _parse_job_metadata(data: dict, job_id: str) -> JobMetadata:
     """Extract JobMetadata fields from a job status response."""
     meta = JobMetadata(job_id=job_id)
@@ -128,11 +97,10 @@ def _parse_job_metadata(data: dict, job_id: str) -> JobMetadata:
     req_meta = metadata_block.get("request", {})
     meta.request_labels = req_meta.get("labels", {}) or {}
 
-    # File size/checksum from results embedded in status (if present)
+    # File size from results embedded in status (if present)
     results = metadata_block.get("results", {})
     asset = results.get("asset", {}).get("value", {})
     meta.file_size = int(asset.get("file:size", 0) or 0)
-    meta.file_checksum = str(asset.get("file:checksum", "") or "")
 
     return meta
 
@@ -143,7 +111,8 @@ def _parse_qos(data: dict) -> QoSData:
     metadata_block = data.get("metadata", {})
     qos_block = metadata_block.get("qos", {})
     status = qos_block.get("status", {})
-    limits = status.get("limit", [])
+    # API used "limit" historically, now uses "user"
+    limits = status.get("user") or status.get("limit") or []
     if limits and isinstance(limits, list):
         entry = limits[0]
         qos.queued = int(entry.get("queued", 0) or 0)
@@ -154,86 +123,6 @@ def _parse_qos(data: dict) -> QoSData:
         except (ValueError, TypeError):
             qos.limit = 0
     return qos
-
-
-def compute_md5(filepath: str) -> str:
-    """Compute the MD5 hex digest of a file."""
-    h = hashlib.md5()
-    with open(filepath, "rb") as f:
-        while True:
-            chunk = f.read(8192)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
-
-
-# Multihash function codes → hashlib algorithm names
-_MULTIHASH_ALGOS: dict[int, str] = {
-    0x11: "sha1",
-    0x12: "sha256",
-    0x13: "sha512",
-    0xD5: "md5",
-}
-
-
-def _read_uvarint(data: bytes, offset: int) -> tuple[int, int]:
-    """Read an unsigned varint, return (value, new_offset)."""
-    result = 0
-    shift = 0
-    while offset < len(data):
-        byte = data[offset]
-        offset += 1
-        result |= (byte & 0x7F) << shift
-        if not (byte & 0x80):
-            return result, offset
-        shift += 7
-    raise ValueError("truncated varint")
-
-
-def parse_multihash(mh_hex: str) -> tuple[str, bytes]:
-    """Parse a hex-encoded multihash string.
-
-    Returns:
-        (hashlib_algorithm_name, digest_bytes)
-    """
-    raw = bytes.fromhex(mh_hex)
-    code, offset = _read_uvarint(raw, 0)
-    length, offset = _read_uvarint(raw, offset)
-    digest = raw[offset : offset + length]
-    if len(digest) != length:
-        raise ValueError(f"expected {length} digest bytes, got {len(digest)}")
-    algo = _MULTIHASH_ALGOS.get(code)
-    if algo is None:
-        raise ValueError(f"unsupported multihash function code: 0x{code:x}")
-    return algo, digest
-
-
-def compute_file_hash(filepath: str, algorithm: str) -> bytes:
-    """Compute the hash digest (raw bytes) of a file."""
-    h = hashlib.new(algorithm)
-    with open(filepath, "rb") as f:
-        while True:
-            chunk = f.read(8192)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.digest()
-
-
-def verify_checksum(filepath: str, expected: str) -> bool:
-    """Verify a file against a multihash-encoded checksum string.
-
-    Falls back to bare MD5 hex comparison for backwards compatibility.
-    """
-    try:
-        algo, expected_digest = parse_multihash(expected)
-    except (ValueError, KeyError):
-        # Fallback: treat as bare MD5 hex
-        actual = compute_md5(filepath)
-        return actual == expected
-    actual_digest = compute_file_hash(filepath, algo)
-    return actual_digest == expected_digest
 
 
 class MetadataPoller:

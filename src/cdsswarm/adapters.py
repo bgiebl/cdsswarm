@@ -89,12 +89,6 @@ class OutputAdapter(ABC):
     def on_task_file_size(self, worker_id: int, file_size: int):
         pass
 
-    def on_task_checksum_result(
-        self, worker_id: int, passed: bool, expected: str
-    ) -> str:
-        """Handle checksum result. Returns 'continue' or 'retry'."""
-        return "continue"
-
     def on_task_server_timestamps(
         self, worker_id: int, created: str, started: str, finished: str
     ):
@@ -236,29 +230,6 @@ class PlainTextAdapter(OutputAdapter):
         else:
             self._write(message)
 
-    def on_task_checksum_result(self, worker_id, passed, expected):
-        if not passed:
-            with self._lock:
-                label = self._worker_labels.get(worker_id, "")
-            prefix = f"{label}: " if label else ""
-            warning = f"WARNING: checksum mismatch (expected {expected})"
-            if self._color:
-                warning = f"\033[1;38;5;208m{warning}\033[0m"
-            self._write(f"  {self._worker_tag(worker_id)} {prefix}{warning}")
-
-            if self._interactive:
-                while True:
-                    try:
-                        choice = input("  [c]ontinue / [r]etry? ").strip().lower()
-                    except (EOFError, KeyboardInterrupt):
-                        return "continue"
-                    if choice in ("c", "continue"):
-                        return "continue"
-                    if choice in ("r", "retry"):
-                        return "retry"
-            return "continue"
-        return "continue"
-
     def on_task_hook_started(self, worker_id, command):
         with self._lock:
             label = self._worker_labels.get(worker_id, "")
@@ -339,7 +310,7 @@ class TextualAdapter(OutputAdapter):
         else:
             self._post(WorkerCdsStatus(worker_id, WorkerStatus.FAILED))
             self._post(WorkerMessage(worker_id, f"Error: {error}"))
-        self._post(WorkerFinished(worker_id))
+        self._post(WorkerFinished(worker_id, success, error))
         self._post(FileCompleted(task.target, success, error))
 
     def on_progress_update(self, completed, total, skipped):
@@ -371,25 +342,6 @@ class TextualAdapter(OutputAdapter):
         from .textual_app import WorkerFileSize
 
         self._post(WorkerFileSize(worker_id, file_size))
-
-    def on_task_checksum_result(self, worker_id, passed, expected):
-        from .textual_app import ShowChecksumDialog, WorkerChecksum
-
-        self._post(WorkerChecksum(worker_id, passed))
-        if not passed:
-            result_event = threading.Event()
-            result_holder: list[str] = []
-            self._post(
-                ShowChecksumDialog(
-                    worker_id,
-                    expected,
-                    result_event,
-                    result_holder,
-                )
-            )
-            result_event.wait()
-            return result_holder[0] if result_holder else "continue"
-        return "continue"
 
     def on_task_server_timestamps(self, worker_id, created, started, finished):
         from .textual_app import WorkerServerTimestamps
@@ -486,11 +438,6 @@ class LoggingAdapter(OutputAdapter):
     def on_task_file_size(self, worker_id, file_size):
         self._write(f"[worker {worker_id}] file size: {file_size}")
         self._inner.on_task_file_size(worker_id, file_size)
-
-    def on_task_checksum_result(self, worker_id, passed, expected):
-        status = "passed" if passed else "FAILED"
-        self._write(f"[worker {worker_id}] checksum {status} (expected {expected})")
-        return self._inner.on_task_checksum_result(worker_id, passed, expected)
 
     def on_task_server_timestamps(self, worker_id, created, started, finished):
         self._write(

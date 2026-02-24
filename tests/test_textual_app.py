@@ -9,7 +9,6 @@ from cdsswarm.core import Task
 from cdsswarm.status import FileStatus, WorkerStatus
 from cdsswarm.textual_app import (
     CdsswarmApp,
-    ChecksumScreen,
     FileActive,
     FileCompleted,
     FileData,
@@ -20,10 +19,8 @@ from cdsswarm.textual_app import (
     ParamsScreen,
     ProgressUpdate,
     QosUpdate,
-    ShowChecksumDialog,
     TasksInitialized,
     WorkerCdsStatus,
-    WorkerChecksum,
     WorkerData,
     WorkerDatasetTitle,
     WorkerFileSize,
@@ -233,6 +230,21 @@ async def test_worker_finished_shows_checkmark():
         row = wt.get_row("0")
         # Elapsed should contain checkmark
         assert any("\u2713" in str(cell) for cell in row)
+
+
+@pytest.mark.asyncio
+async def test_worker_finished_failure_shows_cross():
+    """WorkerFinished with success=False marks elapsed with red cross."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        app.post_message(WorkerStarted(0, "test.grib", "ds", {}, "/out/test.grib"))
+        await pilot.pause()
+        app.post_message(WorkerFinished(0, success=False, error="timeout"))
+        await pilot.pause()
+        wt = app.query_one("#worker-table", DataTable)
+        row = wt.get_row("0")
+        assert any("\u2717" in str(cell) for cell in row)
+        assert "FAILED: timeout" in app.worker_data[0].logs
 
 
 @pytest.mark.asyncio
@@ -489,19 +501,6 @@ async def test_worker_server_timestamps():
 
 
 @pytest.mark.asyncio
-async def test_worker_checksum_updates_state():
-    """WorkerChecksum updates checksum state."""
-    app = CdsswarmApp(num_workers=2)
-    async with app.run_test() as pilot:
-        app.post_message(WorkerChecksum(0, True))
-        await pilot.pause()
-        assert app.worker_data[0].checksum is True
-        app.post_message(WorkerChecksum(1, False))
-        await pilot.pause()
-        assert app.worker_data[1].checksum is False
-
-
-@pytest.mark.asyncio
 async def test_worker_progress_updates_file():
     """WorkerProgress also updates file-level tracking."""
     app = CdsswarmApp(num_workers=2)
@@ -515,60 +514,6 @@ async def test_worker_progress_updates_file():
         await pilot.pause()
         assert app.files[0].dl_bytes == 300
         assert app.files[0].dl_total == 600
-
-
-@pytest.mark.asyncio
-async def test_checksum_screen_continue():
-    """ChecksumScreen can dismiss with 'continue'."""
-    import threading
-
-    app = CdsswarmApp(num_workers=2)
-    async with app.run_test() as pilot:
-        app.worker_data[0].filename = "test.grib"
-        app.worker_data[0].target = "/tmp/test.grib"
-        result_event = threading.Event()
-        result_holder: list[str] = []
-        app.post_message(
-            ShowChecksumDialog(
-                0,
-                "abc123",
-                result_event,
-                result_holder,
-            )
-        )
-        await pilot.pause()
-        assert isinstance(app.screen, ChecksumScreen)
-        await pilot.press("c")
-        await pilot.pause()
-        assert result_event.is_set()
-        assert result_holder[0] == "continue"
-
-
-@pytest.mark.asyncio
-async def test_checksum_screen_retry():
-    """ChecksumScreen can dismiss with 'retry'."""
-    import threading
-
-    app = CdsswarmApp(num_workers=2)
-    async with app.run_test() as pilot:
-        app.worker_data[0].filename = "test.grib"
-        app.worker_data[0].target = "/tmp/test.grib"
-        result_event = threading.Event()
-        result_holder: list[str] = []
-        app.post_message(
-            ShowChecksumDialog(
-                0,
-                "abc123",
-                result_event,
-                result_holder,
-            )
-        )
-        await pilot.pause()
-        assert isinstance(app.screen, ChecksumScreen)
-        await pilot.press("r")
-        await pilot.pause()
-        assert result_event.is_set()
-        assert result_holder[0] == "retry"
 
 
 # ---------------------------------------------------------------------------
@@ -779,67 +724,6 @@ async def test_params_screen_empty():
         assert "\u2014" in str(content.content)
 
 
-@pytest.mark.asyncio
-async def test_checksum_compute_actual_exception():
-    """ChecksumScreen shows '?' when file doesn't exist."""
-    app = CdsswarmApp(num_workers=2)
-    async with app.run_test() as pilot:
-        import threading
-
-        result_event = threading.Event()
-        result_holder: list[str] = []
-        app.worker_data[0].filename = "test.grib"
-        app.worker_data[0].target = "/nonexistent/path/test.grib"
-        app.post_message(ShowChecksumDialog(0, "abc123", result_event, result_holder))
-        await pilot.pause()
-        assert isinstance(app.screen, ChecksumScreen)
-        # Verify "?" appears in the checksum info (from _compute_actual)
-        from textual.widgets import Static
-
-        info = app.screen.query_one(".checksum-info", Static)
-        assert "?" in str(info.content)
-
-
-@pytest.mark.asyncio
-async def test_checksum_button_retry():
-    """Clicking retry button on ChecksumScreen returns 'retry'."""
-    import threading
-
-    app = CdsswarmApp(num_workers=2)
-    async with app.run_test() as pilot:
-        app.worker_data[0].filename = "test.grib"
-        app.worker_data[0].target = "/tmp/test.grib"
-        result_event = threading.Event()
-        result_holder: list[str] = []
-        app.post_message(ShowChecksumDialog(0, "abc123", result_event, result_holder))
-        await pilot.pause()
-        assert isinstance(app.screen, ChecksumScreen)
-        await pilot.click("#checksum-retry")
-        await pilot.pause()
-        assert result_event.is_set()
-        assert result_holder[0] == "retry"
-
-
-@pytest.mark.asyncio
-async def test_checksum_button_continue():
-    """Clicking continue button on ChecksumScreen returns 'continue'."""
-    import threading
-
-    app = CdsswarmApp(num_workers=2)
-    async with app.run_test() as pilot:
-        app.worker_data[0].filename = "test.grib"
-        app.worker_data[0].target = "/tmp/test.grib"
-        result_event = threading.Event()
-        result_holder: list[str] = []
-        app.post_message(ShowChecksumDialog(0, "abc123", result_event, result_holder))
-        await pilot.pause()
-        assert isinstance(app.screen, ChecksumScreen)
-        await pilot.click("#checksum-continue")
-        await pilot.pause()
-        assert result_event.is_set()
-        assert result_holder[0] == "continue"
-
-
 # ---------------------------------------------------------------------------
 # Group D: App-level behavior
 # ---------------------------------------------------------------------------
@@ -987,36 +871,6 @@ async def test_file_row_successful_checkmark():
 # ---------------------------------------------------------------------------
 # Group E: Remaining coverage (L637, L1225, L1286)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_checksum_compute_actual_success():
-    """ChecksumScreen._compute_actual() returns real hash when file exists."""
-    import hashlib
-    import tempfile
-
-    content = b"test content for checksum"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".grib") as f:
-        f.write(content)
-        tmp_path = f.name
-
-    try:
-        # Build a valid sha256 multihash: code=0x12, length=0x20 (32 bytes)
-        sha_digest = hashlib.sha256(content).digest()
-        mh_hex = "1220" + sha_digest.hex()
-
-        screen = ChecksumScreen(
-            worker_id=0,
-            filename="test.grib",
-            expected=mh_hex,
-            target=tmp_path,
-        )
-        actual = screen._compute_actual()
-        assert actual == sha_digest.hex()
-    finally:
-        import os
-
-        os.unlink(tmp_path)
 
 
 @pytest.mark.asyncio

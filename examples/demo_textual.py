@@ -22,10 +22,8 @@ from cdsswarm.textual_app import (
     GlobalMessage,
     ProgressUpdate,
     QosUpdate,
-    ShowChecksumDialog,
     TasksInitialized,
     WorkerCdsStatus,
-    WorkerChecksum,
     WorkerFinished,
     WorkerMessage,
     WorkerProgress,
@@ -208,8 +206,7 @@ class DemoApp(CdsswarmApp):
         active = {}
         task_idx = 0
         tasks_done = 0
-        start_time = time.monotonic()
-        checksum_fail_triggered = False
+        time.monotonic()
 
         def _assign(wid):
             nonlocal task_idx
@@ -321,46 +318,6 @@ class DemoApp(CdsswarmApp):
                     )
 
                     if state["dl_bytes"] >= state["size"]:
-                        elapsed_min = (time.monotonic() - start_time) / 60.0
-
-                        if not checksum_fail_triggered and elapsed_min >= 3.0:
-                            checksum_fail_triggered = True
-                            _post(WorkerChecksum(wid, False))
-                            _post(WorkerMessage(wid, "Checksum mismatch!"))
-                            _post(
-                                FileCompleted(
-                                    state["target"], False, "checksum mismatch"
-                                )
-                            )
-                            _post(WorkerFinished(wid))
-                            tasks_done += 1
-                            _post(
-                                ProgressUpdate(
-                                    tasks_done, num_tasks - num_cached, num_cached
-                                )
-                            )
-                            state["phase"] = 4
-                            state["phase_ticks"] = 0
-
-                            import threading
-
-                            result_event = threading.Event()
-                            result_holder: list[str] = []
-                            _post(
-                                ShowChecksumDialog(
-                                    wid,
-                                    "d41d8cd98f00b204e9800998ecf8427e",
-                                    result_event,
-                                    result_holder,
-                                )
-                            )
-                            result_event.wait()
-                            if result_holder and result_holder[0] == "retry":
-                                _post(WorkerMessage(wid, "Retrying download..."))
-                            else:
-                                _post(WorkerMessage(wid, "Continuing despite mismatch"))
-                            continue
-
                         if random.random() < 0.1:
                             _post(WorkerCdsStatus(wid, WorkerStatus.FAILED))
                             _post(WorkerMessage(wid, "Error: connection timeout"))
@@ -369,11 +326,11 @@ class DemoApp(CdsswarmApp):
                                     state["target"], False, "connection timeout"
                                 )
                             )
+                            _post(WorkerFinished(wid, False, "connection timeout"))
                         else:
-                            _post(WorkerChecksum(wid, True))
                             _post(WorkerMessage(wid, f"Completed: {state['fname']}"))
                             _post(FileCompleted(state["target"], True))
-                        _post(WorkerFinished(wid))
+                            _post(WorkerFinished(wid))
                         tasks_done += 1
                         _post(
                             ProgressUpdate(

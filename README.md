@@ -154,7 +154,7 @@ usage: cdsswarm [-h] [--version] [-w WORKERS] [-m {interactive,script,auto}]
 | `--max-retries` | Max retry attempts per task (default: 3, 1 to disable) |
 | `--output-dir` | Prepend directory to relative target paths |
 | `--dry-run` | Show what would be downloaded without actually downloading |
-| `--ignore-warnings` | Auto-continue on warnings (e.g. checksum mismatch) without prompting |
+| `--ignore-warnings` | Auto-continue on warnings without prompting |
 | `--log FILE` | Write timestamped log to a file |
 | `--summary FILE` | Export summary as JSON (`.json`) or CSV (`.csv`) |
 | `--post-hook CMD` | Shell command to run after each successful download (see below) |

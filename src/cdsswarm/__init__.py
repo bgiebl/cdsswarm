@@ -26,7 +26,7 @@ from importlib.metadata import version as _pkg_version
 
 from .adapters import PlainTextAdapter
 from .core import Result, SwarmDownloader, Task
-from .exceptions import ChecksumMismatchError, ConfigError, RequestFileError
+from .exceptions import ConfigError, RequestFileError
 from .generate import expand_template
 from .summary import build_summary
 
@@ -37,7 +37,6 @@ __all__ = [
     "build_summary",
     "download",
     "expand_template",
-    "ChecksumMismatchError",
     "ConfigError",
     "RequestFileError",
     "__version__",

@@ -78,21 +78,6 @@ class TestDelegation:
         inner.on_task_hook_finished.assert_called_once_with(0, False, "exit code 1")
 
 
-class TestChecksum:
-    def test_checksum_result_return_value_forwarded(self):
-        adapter, inner, _ = _make_adapter()
-        inner.on_task_checksum_result.return_value = "retry"
-        result = adapter.on_task_checksum_result(0, False, "abc123")
-        assert result == "retry"
-        inner.on_task_checksum_result.assert_called_once_with(0, False, "abc123")
-
-    def test_checksum_passed(self):
-        adapter, inner, _ = _make_adapter()
-        inner.on_task_checksum_result.return_value = "continue"
-        result = adapter.on_task_checksum_result(0, True, "abc123")
-        assert result == "continue"
-
-
 class TestLogging:
     def test_timestamp_format(self):
         adapter, _, log_file = _make_adapter()

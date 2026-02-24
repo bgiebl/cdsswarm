@@ -2,7 +2,7 @@
 
 import io
 import threading
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from cdsswarm.adapters import (
     LoggingAdapter,
@@ -53,16 +53,6 @@ class TestOutputAdapterDefaults:
     def test_on_task_file_size(self):
         adapter = _NoOpAdapter()
         adapter.on_task_file_size(0, 1024 * 1024)
-
-    def test_on_task_checksum_result_returns_continue(self):
-        adapter = _NoOpAdapter()
-        result = adapter.on_task_checksum_result(0, True, "abc123")
-        assert result == "continue"
-
-    def test_on_task_checksum_result_mismatch_returns_continue(self):
-        adapter = _NoOpAdapter()
-        result = adapter.on_task_checksum_result(0, False, "abc123")
-        assert result == "continue"
 
     def test_on_task_server_timestamps(self):
         adapter = _NoOpAdapter()
@@ -204,35 +194,6 @@ class TestPlainTextAdapter:
         adapter.on_task_message(0, "Request is queued")
         assert "\033" not in messages[0]
         assert "accepted" in messages[0]
-
-    def test_checksum_pass_is_silent(self):
-        messages = []
-        adapter = PlainTextAdapter(write_fn=messages.append)
-        result = adapter.on_task_checksum_result(0, True, "abc123")
-        assert result == "continue"
-        assert len(messages) == 0
-
-    def test_checksum_mismatch_prints_warning(self):
-        messages = []
-        adapter = PlainTextAdapter(write_fn=messages.append)
-        result = adapter.on_task_checksum_result(0, False, "abc123")
-        assert result == "continue"
-        assert any("WARNING" in m and "checksum" in m.lower() for m in messages)
-        assert any("abc123" in m for m in messages)
-
-    def test_checksum_mismatch_bold_orange(self):
-        messages = []
-        adapter = PlainTextAdapter(write_fn=messages.append, use_color=True)
-        adapter.on_task_checksum_result(0, False, "abc123")
-        # bold orange: \033[1;38;5;208m
-        assert "\033[1;38;5;208m" in messages[0]
-
-    def test_checksum_mismatch_no_color(self):
-        messages = []
-        adapter = PlainTextAdapter(write_fn=messages.append, use_color=False)
-        adapter.on_task_checksum_result(0, False, "abc123")
-        assert "\033" not in messages[0]
-        assert "WARNING" in messages[0]
 
     def test_qos_update_prints(self):
         messages = []
@@ -457,48 +418,11 @@ class TestPlainTextAdapter:
         adapter.on_task_hook_finished(0, False, "exit code 1")
         assert "\033[1;38;5;208m" in messages[0]
 
-    def test_checksum_interactive_continue(self):
-        messages = []
-        adapter = PlainTextAdapter(
-            write_fn=messages.append, use_color=False, interactive=True
-        )
-        with patch("builtins.input", return_value="c"):
-            result = adapter.on_task_checksum_result(0, False, "abc123")
-        assert result == "continue"
-
-    def test_checksum_interactive_retry(self):
-        messages = []
-        adapter = PlainTextAdapter(
-            write_fn=messages.append, use_color=False, interactive=True
-        )
-        with patch("builtins.input", return_value="retry"):
-            result = adapter.on_task_checksum_result(0, False, "abc123")
-        assert result == "retry"
-
-    def test_checksum_interactive_eof(self):
-        messages = []
-        adapter = PlainTextAdapter(
-            write_fn=messages.append, use_color=False, interactive=True
-        )
-        with patch("builtins.input", side_effect=EOFError):
-            result = adapter.on_task_checksum_result(0, False, "abc123")
-        assert result == "continue"
-
-    def test_checksum_interactive_invalid_then_valid(self):
-        messages = []
-        adapter = PlainTextAdapter(
-            write_fn=messages.append, use_color=False, interactive=True
-        )
-        with patch("builtins.input", side_effect=["x", "invalid", "r"]):
-            result = adapter.on_task_checksum_result(0, False, "abc123")
-        assert result == "retry"
-
 
 class TestLoggingAdapter:
     def _make_adapter(self):
         log_file = io.StringIO()
         inner = MagicMock(spec=PlainTextAdapter)
-        inner.on_task_checksum_result.return_value = "continue"
         adapter = LoggingAdapter(inner, log_file)
         return adapter, inner, log_file
 
@@ -528,13 +452,6 @@ class TestLoggingAdapter:
         adapter.on_task_file_size(0, 1024)
         assert "file size: 1024" in log_file.getvalue()
         inner.on_task_file_size.assert_called_once_with(0, 1024)
-
-    def test_on_task_checksum_result(self):
-        adapter, inner, log_file = self._make_adapter()
-        result = adapter.on_task_checksum_result(0, True, "abc123")
-        assert "checksum passed" in log_file.getvalue()
-        assert result == "continue"
-        inner.on_task_checksum_result.assert_called_once_with(0, True, "abc123")
 
     def test_on_task_server_timestamps(self):
         adapter, inner, log_file = self._make_adapter()
@@ -675,6 +592,7 @@ class TestTextualAdapter:
         assert isinstance(msgs[1], WorkerMessage)
         assert "Completed" in msgs[1].message
         assert isinstance(msgs[2], WorkerFinished)
+        assert msgs[2].success is True
         assert isinstance(msgs[3], FileCompleted)
         assert msgs[3].success is True
 
@@ -696,6 +614,8 @@ class TestTextualAdapter:
         assert isinstance(msgs[1], WorkerMessage)
         assert "timeout" in msgs[1].message
         assert isinstance(msgs[2], WorkerFinished)
+        assert msgs[2].success is False
+        assert msgs[2].error == "timeout"
         assert isinstance(msgs[3], FileCompleted)
         assert msgs[3].success is False
         assert msgs[3].error == "timeout"
@@ -762,38 +682,6 @@ class TestTextualAdapter:
         assert len(msgs) == 1
         assert isinstance(msgs[0], WorkerFileSize)
         assert msgs[0].file_size == 95418
-
-    def test_on_task_checksum_pass(self):
-        from cdsswarm.textual_app import WorkerChecksum
-
-        adapter, app = self._make_adapter()
-        result = adapter.on_task_checksum_result(0, True, "abc123")
-        assert result == "continue"
-        msgs = self._posted_messages(app)
-        assert len(msgs) == 1
-        assert isinstance(msgs[0], WorkerChecksum)
-        assert msgs[0].passed is True
-
-    def test_on_task_checksum_fail(self):
-        from cdsswarm.textual_app import ShowChecksumDialog
-
-        adapter, app = self._make_adapter()
-
-        # When ShowChecksumDialog is posted, simulate the UI setting the result
-        def fake_call_from_thread(fn, msg):
-            if isinstance(msg, ShowChecksumDialog):
-                msg.result_holder.append("retry")
-                msg.result_event.set()
-
-        app.call_from_thread.side_effect = fake_call_from_thread
-
-        result = adapter.on_task_checksum_result(0, False, "expected-hash")
-        assert result == "retry"
-        # Verify both WorkerChecksum and ShowChecksumDialog were posted
-        calls = app.call_from_thread.call_args_list
-        msg_types = [type(c[0][1]).__name__ for c in calls]
-        assert "WorkerChecksum" in msg_types
-        assert "ShowChecksumDialog" in msg_types
 
     def test_on_task_server_timestamps(self):
         from cdsswarm.textual_app import WorkerServerTimestamps

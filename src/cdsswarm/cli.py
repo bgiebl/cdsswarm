@@ -259,7 +259,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--ignore-warnings",
         action="store_true",
         default=None,
-        help="Auto-continue on warnings (e.g. checksum mismatch) without prompting",
+        help="Auto-continue on warnings without prompting",
     )
     parser.add_argument(
         "--log",

@@ -13,9 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 import cdsapi
-import requests as http_requests
-
-from ._cds_metadata import MetadataPoller, fetch_job_results, verify_checksum
+from ._cds_metadata import MetadataPoller
 from ._cds_utils import (
     cancel_cds_request,
     find_reusable_jobs,
@@ -368,51 +366,8 @@ class SwarmDownloader:
                         self._cancel_event.wait(0.5)
                     continue
 
-                # Checksum verification
-                rid = None
-                with state.lock:
-                    req_info = state.active_requests.get(task.target)
-                    if req_info:
-                        rid = req_info[0]
-
-                should_retry = False
-                if rid:
-                    try:
-                        inner = getattr(client, "client", None)
-                        if inner is not None and hasattr(inner, "_get_headers"):
-                            _file_size, checksum_md5 = fetch_job_results(inner, rid)
-                            if checksum_md5:
-                                passed = verify_checksum(task.target, checksum_md5)
-                                decision = self._adapter.on_task_checksum_result(
-                                    wid, passed, checksum_md5
-                                )
-                                if not passed:
-                                    self._adapter.on_task_message(
-                                        wid,
-                                        f"Checksum mismatch (expected {checksum_md5})",
-                                    )
-                                    if decision == "retry":
-                                        should_retry = True
-                                    else:
-                                        with state.lock:
-                                            self._task_warnings.setdefault(
-                                                task.target, []
-                                            ).append(
-                                                f"Checksum mismatch (expected {checksum_md5})"
-                                            )
-                                else:
-                                    self._adapter.on_task_message(wid, "Checksum OK")
-                    except http_requests.RequestException as exc:
-                        log.debug("Checksum fetch failed for %s: %s", rid, exc)
-                    except (OSError, ValueError) as exc:
-                        log.warning("Checksum verification error: %s", exc)
-
                 with state.lock:
                     state.active_requests.pop(task.target, None)
-
-                if should_retry:
-                    self._adapter.on_task_message(wid, "Retrying download...")
-                    continue
 
                 if self._post_hook:
                     self._run_post_hook(wid, task, state)
