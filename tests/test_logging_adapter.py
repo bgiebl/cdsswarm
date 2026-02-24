@@ -62,11 +62,6 @@ class TestDelegation:
         adapter.on_task_request_id(0, "abc-123")
         inner.on_task_request_id.assert_called_once_with(0, "abc-123")
 
-    def test_on_qos_update_delegates(self):
-        adapter, inner, _ = _make_adapter()
-        adapter.on_qos_update(3, 2, 10)
-        inner.on_qos_update.assert_called_once_with(3, 2, 10)
-
     def test_on_task_hook_started_delegates(self):
         adapter, inner, _ = _make_adapter()
         adapter.on_task_hook_started(0, "gzip file.grib")

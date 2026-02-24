@@ -18,7 +18,6 @@ from cdsswarm.textual_app import (
     MeterBar,
     ParamsScreen,
     ProgressUpdate,
-    QosUpdate,
     TasksInitialized,
     WorkerCdsStatus,
     WorkerData,
@@ -294,18 +293,6 @@ async def test_global_message():
 
 
 @pytest.mark.asyncio
-async def test_qos_update():
-    """QosUpdate updates QoS state."""
-    app = CdsswarmApp(num_workers=2)
-    async with app.run_test() as pilot:
-        app.post_message(QosUpdate(5220, 400, 400))
-        await pilot.pause()
-        assert app.qos_queued == 5220
-        assert app.qos_running == 400
-        assert app.qos_limit == 400
-
-
-@pytest.mark.asyncio
 async def test_tasks_initialized_populates_files():
     """TasksInitialized sets up the files table."""
     app = CdsswarmApp(num_workers=2)
@@ -559,9 +546,6 @@ class TestMeterBarRendering:
             skipped=0,
             eta_start=time.monotonic(),
             status="",
-            qos_queued=0,
-            qos_running=0,
-            qos_limit=0,
         )
         assert "ETA ..." in result
 
@@ -574,9 +558,6 @@ class TestMeterBarRendering:
             skipped=0,
             eta_start=None,
             status="",
-            qos_queued=0,
-            qos_running=0,
-            qos_limit=0,
         )
         assert "ETA ..." in result
 
@@ -588,9 +569,6 @@ class TestMeterBarRendering:
             skipped=0,
             eta_start=None,
             status="",
-            qos_queued=0,
-            qos_running=0,
-            qos_limit=0,
         )
         assert "Preparing..." in result
 

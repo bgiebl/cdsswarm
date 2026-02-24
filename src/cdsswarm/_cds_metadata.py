@@ -1,4 +1,4 @@
-"""CDS API metadata: job polling, QoS, and human-readable labels."""
+"""CDS API metadata: job polling and human-readable labels."""
 
 from __future__ import annotations
 
@@ -26,15 +26,6 @@ class JobMetadata:
 
 
 @dataclass
-class QoSData:
-    """Global CDS queue statistics."""
-
-    queued: int = 0
-    running: int = 0
-    limit: int = 0
-
-
-@dataclass
 class ServerStats:
     """Server-wide CDS queue statistics and system status."""
 
@@ -45,22 +36,19 @@ class ServerStats:
 
 
 def fetch_job_metadata(
-    inner, job_id: str, *, include_qos: bool = False, include_request: bool = False
-) -> tuple[JobMetadata, QoSData | None]:
+    inner, job_id: str, *, include_request: bool = False
+) -> JobMetadata:
     """Fetch metadata for a CDS job via the REST API.
 
     Args:
         inner: The inner ecmwf.datastores client (has .url, ._get_headers, .verify).
         job_id: The CDS job/request ID.
-        include_qos: Whether to request QoS data (?qos=true).
         include_request: Whether to request human-readable labels (?request=true).
 
     Returns:
-        Tuple of (JobMetadata, QoSData or None).
+        JobMetadata for the job.
     """
     params = []
-    if include_qos:
-        params.append("qos=true")
     if include_request:
         params.append("request=true")
 
@@ -84,9 +72,7 @@ def fetch_job_metadata(
     resp.raise_for_status()
     data = resp.json()
 
-    meta = _parse_job_metadata(data, job_id)
-    qos = _parse_qos(data) if include_qos else None
-    return meta, qos
+    return _parse_job_metadata(data, job_id)
 
 
 def _parse_job_metadata(data: dict, job_id: str) -> JobMetadata:
@@ -114,31 +100,11 @@ def _parse_job_metadata(data: dict, job_id: str) -> JobMetadata:
     return meta
 
 
-def _parse_qos(data: dict) -> QoSData:
-    """Extract QoS data from a job status response."""
-    qos = QoSData()
-    metadata_block = data.get("metadata", {})
-    qos_block = metadata_block.get("qos", {})
-    status = qos_block.get("status", {})
-    # API used "limit" historically, now uses "user"
-    limits = status.get("user") or status.get("limit") or []
-    if limits and isinstance(limits, list):
-        entry = limits[0]
-        qos.queued = int(entry.get("queued", 0) or 0)
-        qos.running = int(entry.get("running", 0) or 0)
-        conclusion = entry.get("conclusion", "0") or "0"
-        try:
-            qos.limit = int(conclusion)
-        except (ValueError, TypeError):
-            qos.limit = 0
-    return qos
-
-
 class MetadataPoller:
-    """Daemon thread that polls the CDS REST API for job metadata and QoS.
+    """Daemon thread that polls the CDS REST API for job metadata.
 
     Polls all active jobs periodically, extracts per-job metadata (progress,
-    timestamps, labels, dataset title, file size) and global QoS data.
+    timestamps, labels, dataset title, file size).
     Routes updates through adapter callbacks.
 
     Args:
@@ -199,17 +165,15 @@ class MetadataPoller:
         if not active:
             return
 
-        qos_fetched = False
         for target, (rid, _client) in active.items():
             wid = task_worker.get(target)
             if wid is None:
                 continue
 
             try:
-                meta, qos = fetch_job_metadata(
+                meta = fetch_job_metadata(
                     inner,
                     rid,
-                    include_qos=not qos_fetched,
                     include_request=True,
                 )
             except http_requests.RequestException:
@@ -222,11 +186,6 @@ class MetadataPoller:
                 continue
 
             self._dispatch_updates(wid, rid, meta)
-
-            if qos is not None and not qos_fetched:
-                qos_fetched = True
-                if qos.queued > 0 or qos.running > 0 or qos.limit > 0:
-                    self._adapter.on_qos_update(qos.queued, qos.running, qos.limit)
 
     def _dispatch_updates(self, wid: int, rid: str, meta: JobMetadata):
         """Fire adapter callbacks only when values change."""

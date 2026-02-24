@@ -230,14 +230,6 @@ class TasksInitialized(Message):
         self.skipped_targets = skipped_targets
 
 
-class QosUpdate(Message):
-    def __init__(self, queued: int, running: int, limit: int) -> None:
-        super().__init__()
-        self.queued = queued
-        self.running = running
-        self.limit = limit
-
-
 class ServerStatsUpdate(Message):
     def __init__(
         self,
@@ -410,7 +402,7 @@ class HeaderBar(Static):
 
 
 class MeterBar(Static):
-    """Compact meter area showing progress bar and QoS info."""
+    """Compact meter area showing progress bar and server status."""
 
     def render_progress(
         self,
@@ -419,9 +411,6 @@ class MeterBar(Static):
         skipped: int,
         eta_start: float | None,
         status: str,
-        qos_queued: int,
-        qos_running: int,
-        qos_limit: int,
         server_running: int = 0,
         server_queued: int = 0,
         running_users: int = 0,
@@ -451,13 +440,8 @@ class MeterBar(Static):
         else:
             text = "Preparing..."
 
-        # QoS / status line
+        # Server status line
         parts = []
-        if qos_queued > 0 or qos_running > 0:
-            parts.append(
-                f"CDS Server: {qos_queued} queued \u2502 "
-                f"{qos_running}/{qos_limit} running"
-            )
 
         # Server-wide stats
         if server_queued > 0 or server_running > 0:
@@ -775,9 +759,6 @@ class CdsswarmApp(App):
         self.progress_skipped = 0
         self.eta_start_time: float | None = None
         self.status_message = ""
-        self.qos_queued = 0
-        self.qos_running = 0
-        self.qos_limit = 0
         self.server_running = 0
         self.server_queued = 0
         self.server_running_users = 0
@@ -1049,12 +1030,6 @@ class CdsswarmApp(App):
             )
         self._update_files_info()
 
-    def on_qos_update(self, msg: QosUpdate) -> None:
-        self.qos_queued = msg.queued
-        self.qos_running = msg.running
-        self.qos_limit = msg.limit
-        self._update_meter_bar()
-
     def on_server_stats_update(self, msg: ServerStatsUpdate) -> None:
         self.server_running = msg.server_running
         self.server_queued = msg.server_queued
@@ -1226,9 +1201,6 @@ class CdsswarmApp(App):
                 self.progress_skipped,
                 self.eta_start_time,
                 self.status_message,
-                self.qos_queued,
-                self.qos_running,
-                self.qos_limit,
                 self.server_running,
                 self.server_queued,
                 self.server_running_users,

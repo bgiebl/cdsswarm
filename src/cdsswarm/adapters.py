@@ -97,9 +97,6 @@ class OutputAdapter(ABC):
     def on_task_request_labels(self, worker_id: int, labels: dict):
         pass
 
-    def on_qos_update(self, queued: int, running: int, limit: int):
-        pass
-
     def on_task_hook_started(self, worker_id: int, command: str):
         pass
 
@@ -135,7 +132,6 @@ class PlainTextAdapter(OutputAdapter):
         self._done = 0
         self._total = 0
         self._last_status: dict[int, str] = {}
-        self._last_qos: tuple[int, int, int] | None = None
         self._last_dl_milestone: dict[int, int] = {}
         self._worker_labels: dict[int, str] = {}
         if use_color is None:
@@ -251,15 +247,6 @@ class PlainTextAdapter(OutputAdapter):
             if self._color:
                 msg = f"\033[1;38;5;208m{msg}\033[0m"
             self._write(f"  {self._worker_tag(worker_id)} {prefix}{msg}")
-
-    def on_qos_update(self, queued, running, limit):
-        new_qos = (queued, running, limit)
-        with self._lock:
-            if new_qos == self._last_qos:
-                return
-            self._last_qos = new_qos
-        if queued > 0 or running > 0:
-            self._write(f"  [CDS server] {queued} queued | {running}/{limit} running")
 
     def on_server_stats_update(
         self, server_running, server_queued, running_users, system_status
@@ -387,11 +374,6 @@ class TextualAdapter(OutputAdapter):
         if not success:
             self._post(WorkerMessage(worker_id, f"Post-hook failed: {warning}"))
 
-    def on_qos_update(self, queued, running, limit):
-        from .textual_app import QosUpdate
-
-        self._post(QosUpdate(queued, running, limit))
-
     def on_server_stats_update(
         self, server_running, server_queued, running_users, system_status
     ):
@@ -487,10 +469,6 @@ class LoggingAdapter(OutputAdapter):
         status = "ok" if success else f"FAILED: {warning}"
         self._write(f"[worker {worker_id}] post-hook finished: {status}")
         self._inner.on_task_hook_finished(worker_id, success, warning)
-
-    def on_qos_update(self, queued, running, limit):
-        self._write(f"qos: queued={queued} running={running} limit={limit}")
-        self._inner.on_qos_update(queued, running, limit)
 
     def on_server_stats_update(
         self, server_running, server_queued, running_users, system_status

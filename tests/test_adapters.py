@@ -62,10 +62,6 @@ class TestOutputAdapterDefaults:
         adapter = _NoOpAdapter()
         adapter.on_task_request_labels(0, {"year": "2024"})
 
-    def test_on_qos_update(self):
-        adapter = _NoOpAdapter()
-        adapter.on_qos_update(100, 20, 20)
-
     def test_on_task_hook_started(self):
         adapter = _NoOpAdapter()
         adapter.on_task_hook_started(0, "gzip file.grib")
@@ -191,34 +187,6 @@ class TestPlainTextAdapter:
         assert "\033" not in messages[0]
         assert "accepted" in messages[0]
 
-    def test_qos_update_prints(self):
-        messages = []
-        adapter = PlainTextAdapter(write_fn=messages.append)
-        adapter.on_qos_update(5220, 400, 400)
-        assert any("5220 queued" in m for m in messages)
-        assert any("400/400 running" in m for m in messages)
-
-    def test_qos_update_zeros_silent(self):
-        messages = []
-        adapter = PlainTextAdapter(write_fn=messages.append)
-        adapter.on_qos_update(0, 0, 0)
-        assert len(messages) == 0
-
-    def test_qos_update_deduplicated(self):
-        messages = []
-        adapter = PlainTextAdapter(write_fn=messages.append)
-        adapter.on_qos_update(100, 20, 20)
-        adapter.on_qos_update(100, 20, 20)
-        adapter.on_qos_update(100, 20, 20)
-        assert len(messages) == 1
-
-    def test_qos_update_change_printed(self):
-        messages = []
-        adapter = PlainTextAdapter(write_fn=messages.append)
-        adapter.on_qos_update(100, 20, 20)
-        adapter.on_qos_update(80, 20, 20)
-        assert len(messages) == 2
-
     def test_download_progress_milestones(self):
         messages = []
         adapter = PlainTextAdapter(write_fn=messages.append)
@@ -308,7 +276,6 @@ class TestPlainTextAdapter:
                     adapter.on_task_progress(wid, total * pct // 100, total)
                 adapter.on_progress_update(wid + 1, 8, 0)
                 adapter.on_task_completed(wid, task, success=True)
-                adapter.on_qos_update(10 - wid, wid, 20)
             except Exception as exc:
                 errors.append(exc)
 
@@ -486,14 +453,6 @@ class TestLoggingAdapter:
         assert "FAILED" in log
         assert "exit code 1" in log
         inner.on_task_hook_finished.assert_called_once_with(0, False, "exit code 1")
-
-    def test_on_qos_update(self):
-        adapter, inner, log_file = self._make_adapter()
-        adapter.on_qos_update(100, 20, 20)
-        log = log_file.getvalue()
-        assert "qos:" in log
-        assert "queued=100" in log
-        inner.on_qos_update.assert_called_once_with(100, 20, 20)
 
 
 class TestTextualAdapter:
@@ -695,18 +654,6 @@ class TestTextualAdapter:
         assert len(msgs) == 1
         assert isinstance(msgs[0], WorkerRequestLabels)
         assert msgs[0].labels == labels
-
-    def test_on_qos_update(self):
-        from cdsswarm.textual_app import QosUpdate
-
-        adapter, app = self._make_adapter()
-        adapter.on_qos_update(100, 50, 400)
-        msgs = self._posted_messages(app)
-        assert len(msgs) == 1
-        assert isinstance(msgs[0], QosUpdate)
-        assert msgs[0].queued == 100
-        assert msgs[0].running == 50
-        assert msgs[0].limit == 400
 
     def test_on_task_hook_started(self):
         from cdsswarm.textual_app import WorkerMessage

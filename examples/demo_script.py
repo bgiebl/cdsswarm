@@ -105,8 +105,6 @@ def main():
     for wid in range(min(num_workers, pending)):
         assign(wid)
 
-    adapter.on_qos_update(random.randint(3000, 6000), random.randint(380, 400), 400)
-
     cancelled = False
     while active:
         try:
@@ -117,11 +115,6 @@ def main():
                 adapter.on_global_message(f"  Cancelled {active[wid]['rid']}")
             cancelled = True
             break
-
-        if random.random() < 0.08:
-            adapter.on_qos_update(
-                random.randint(3000, 6000), random.randint(380, 400), 400
-            )
 
         for wid in list(active):
             state = active[wid]

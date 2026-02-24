@@ -21,7 +21,6 @@ from cdsswarm.textual_app import (
     FileCompleted,
     GlobalMessage,
     ProgressUpdate,
-    QosUpdate,
     ServerStatsUpdate,
     TasksInitialized,
     WorkerCdsStatus,
@@ -201,7 +200,6 @@ class DemoApp(CdsswarmApp):
         _post(TasksInitialized(all_task_objects, skipped_targets))
         _post(ProgressUpdate(0, num_tasks - num_cached, num_cached))
         _post(GlobalMessage(f"Downloading {num_tasks} files ({num_workers} workers)"))
-        _post(QosUpdate(random.randint(3000, 6000), random.randint(380, 400), 400))
         _post(
             ServerStatsUpdate(
                 random.randint(400, 500),
@@ -253,13 +251,6 @@ class DemoApp(CdsswarmApp):
                 break
 
             if random.random() < 0.1:
-                _post(
-                    QosUpdate(
-                        random.randint(3000, 6000),
-                        random.randint(380, 400),
-                        400,
-                    )
-                )
                 _post(
                     ServerStatsUpdate(
                         random.randint(400, 500),

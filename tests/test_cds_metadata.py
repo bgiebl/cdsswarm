@@ -10,9 +10,7 @@ import requests as http_requests
 from cdsswarm._cds_metadata import (
     JobMetadata,
     MetadataPoller,
-    QoSData,
     _parse_job_metadata,
-    _parse_qos,
     fetch_job_metadata,
 )
 
@@ -74,86 +72,6 @@ class TestParsJobMetadata:
         assert meta.request_labels == {}
 
 
-class TestParseQos:
-    def test_valid_qos(self):
-        data = {
-            "metadata": {
-                "qos": {
-                    "status": {
-                        "limit": [
-                            {
-                                "info": "Max requests is 400",
-                                "queued": 5220,
-                                "running": 400,
-                                "conclusion": "400",
-                            }
-                        ]
-                    }
-                }
-            }
-        }
-        qos = _parse_qos(data)
-        assert qos.queued == 5220
-        assert qos.running == 400
-        assert qos.limit == 400
-
-    def test_valid_qos_user_key(self):
-        """New API format uses 'user' instead of 'limit'."""
-        data = {
-            "metadata": {
-                "qos": {
-                    "status": {
-                        "user": [
-                            {
-                                "info": "Max per-user requests is 1",
-                                "queued": 6,
-                                "running": 1,
-                                "conclusion": "1",
-                            }
-                        ]
-                    }
-                }
-            }
-        }
-        qos = _parse_qos(data)
-        assert qos.queued == 6
-        assert qos.running == 1
-        assert qos.limit == 1
-
-    def test_empty_qos(self):
-        data = {"metadata": {"qos": {"status": {}}}}
-        qos = _parse_qos(data)
-        assert qos.queued == 0
-        assert qos.running == 0
-        assert qos.limit == 0
-
-    def test_no_metadata(self):
-        data = {}
-        qos = _parse_qos(data)
-        assert qos.queued == 0
-        assert qos.running == 0
-
-    def test_empty_limit_array(self):
-        data = {"metadata": {"qos": {"status": {"limit": []}}}}
-        qos = _parse_qos(data)
-        assert qos.queued == 0
-
-    def test_non_numeric_conclusion(self):
-        data = {
-            "metadata": {
-                "qos": {
-                    "status": {
-                        "limit": [{"queued": 10, "running": 5, "conclusion": "abc"}]
-                    }
-                }
-            }
-        }
-        qos = _parse_qos(data)
-        assert qos.queued == 10
-        assert qos.running == 5
-        assert qos.limit == 0
-
-
 class TestFetchJobMetadata:
     @patch("cdsswarm._cds_metadata.http_requests")
     def test_url_construction(self, mock_requests):
@@ -166,14 +84,13 @@ class TestFetchJobMetadata:
         mock_requests.get.return_value = mock_resp
 
         with patch("cdsswarm._cds_metadata.ds_config", create=True):
-            meta, qos = fetch_job_metadata(inner, "test-id")
+            fetch_job_metadata(inner, "test-id")
 
         call_url = mock_requests.get.call_args[0][0]
         assert "jobs/test-id" in call_url
-        assert qos is None
 
     @patch("cdsswarm._cds_metadata.http_requests")
-    def test_with_qos_and_request(self, mock_requests):
+    def test_with_request(self, mock_requests):
         inner = MagicMock()
         inner.url = "https://cds.example.com/api"
         inner.verify = True
@@ -182,24 +99,14 @@ class TestFetchJobMetadata:
         mock_resp.json.return_value = {
             "jobID": "test-id",
             "metadata": {
-                "qos": {
-                    "status": {
-                        "limit": [{"queued": 100, "running": 50, "conclusion": "400"}]
-                    }
-                },
                 "request": {"labels": {"Variable": "Temperature"}},
             },
         }
         mock_requests.get.return_value = mock_resp
 
-        meta, qos = fetch_job_metadata(
-            inner, "test-id", include_qos=True, include_request=True
-        )
+        meta = fetch_job_metadata(inner, "test-id", include_request=True)
         call_url = mock_requests.get.call_args[0][0]
-        assert "qos=true" in call_url
         assert "request=true" in call_url
-        assert qos is not None
-        assert qos.queued == 100
         assert meta.request_labels == {"Variable": "Temperature"}
 
 
@@ -262,8 +169,7 @@ class TestMetadataPoller:
             request_labels={"Variable": "T"},
             file_size=1000,
         )
-        qos = QoSData(queued=100, running=50, limit=400)
-        mock_fetch.return_value = (meta, qos)
+        mock_fetch.return_value = meta
 
         poller = MetadataPoller(adapter, state, cancel, poll_interval=0.05)
         inner = MagicMock()
@@ -275,7 +181,6 @@ class TestMetadataPoller:
         adapter.on_task_file_size.assert_called_with(0, 1000)
         adapter.on_task_dataset_title.assert_called_with(0, "ERA5")
         adapter.on_task_request_labels.assert_called_with(0, {"Variable": "T"})
-        adapter.on_qos_update.assert_called_with(100, 50, 400)
 
     @patch("cdsswarm._cds_metadata.fetch_job_metadata")
     def test_poll_skips_unchanged(self, mock_fetch):
@@ -287,7 +192,7 @@ class TestMetadataPoller:
         cancel = threading.Event()
 
         meta = JobMetadata(job_id="rid-1", file_size=1000)
-        mock_fetch.return_value = (meta, None)
+        mock_fetch.return_value = meta
 
         poller = MetadataPoller(adapter, state, cancel)
         inner = MagicMock()
@@ -343,7 +248,7 @@ class TestMetadataPoller:
         cancel = threading.Event()
 
         meta = JobMetadata(job_id="rid-1", file_size=1000)
-        mock_fetch.return_value = (meta, None)
+        mock_fetch.return_value = meta
 
         poller = MetadataPoller(adapter, state, cancel, poll_interval=0.05)
         # Register inner client before starting
@@ -431,6 +336,6 @@ class TestFetchImportFallback:
             mock_resp.json.return_value = {"jobID": "test-id"}
             with patch("cdsswarm._cds_metadata.http_requests") as mock_req:
                 mock_req.get.return_value = mock_resp
-                meta, qos = fetch_job_metadata(inner, "test-id")
+                fetch_job_metadata(inner, "test-id")
             url = mock_req.get.call_args[0][0]
             assert "/v1/" in url
