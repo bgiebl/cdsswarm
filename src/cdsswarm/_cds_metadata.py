@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 
@@ -31,6 +32,16 @@ class QoSData:
     queued: int = 0
     running: int = 0
     limit: int = 0
+
+
+@dataclass
+class ServerStats:
+    """Server-wide CDS queue statistics and system status."""
+
+    server_running: int = 0
+    server_queued: int = 0
+    running_users: int = 0
+    system_status: str = ""
 
 
 def fetch_job_metadata(
@@ -241,3 +252,111 @@ class MetadataPoller:
             known["request_labels"] = meta.request_labels
 
         self._known_metadata[rid] = known
+
+
+# ---------------------------------------------------------------------------
+# Server-wide stats (unauthenticated scraping)
+# ---------------------------------------------------------------------------
+
+_NEXT_DATA_RE = re.compile(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
+
+_LIVE_URL = "https://cds.climate.copernicus.eu/live"
+_STATUS_URL = "https://apps.ecmwf.int/status/status"
+
+
+def fetch_live_stats(url: str = _LIVE_URL) -> ServerStats:
+    """Scrape /live page for queue_status from __NEXT_DATA__."""
+    import json
+
+    resp = http_requests.get(url, timeout=15)
+    resp.raise_for_status()
+    match = _NEXT_DATA_RE.search(resp.text)
+    if not match:
+        raise ValueError("__NEXT_DATA__ not found in /live page")
+    data = json.loads(match.group(1))
+    # Navigate: props.pageProps.queue_status
+    props = data.get("props", {})
+    page_props = props.get("pageProps", {})
+    qs = page_props.get("queue_status", {})
+    return ServerStats(
+        server_running=int(qs.get("running_requests_real_time", 0) or 0),
+        server_queued=int(qs.get("queued_requests_real_time", 0) or 0),
+        running_users=int(qs.get("running_users", 0) or 0),
+    )
+
+
+def fetch_system_status(url: str = _STATUS_URL) -> str:
+    """GET the ECMWF status API and return the Data Stores status string."""
+    resp = http_requests.get(url, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    for node in data:
+        if node.get("Title") == "Data Stores":
+            return node.get("Status", "")
+    return ""
+
+
+class LiveScraper:
+    """Daemon thread that polls server-wide CDS stats and system status.
+
+    Fetches once immediately on start, then every ``poll_interval`` seconds.
+    Deduplicates: only calls ``adapter.on_server_stats_update()`` when values change.
+
+    Args:
+        adapter: OutputAdapter to receive callbacks.
+        cancel_event: Threading event to signal shutdown.
+        poll_interval: Seconds between poll cycles (default 60).
+    """
+
+    def __init__(self, adapter, cancel_event, poll_interval=60.0):
+        self._adapter = adapter
+        self._cancel_event = cancel_event
+        self._poll_interval = poll_interval
+        self._thread: threading.Thread | None = None
+        self._last: tuple[int, int, int, str] | None = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        # Don't set cancel_event here — it's shared with the downloader.
+        # The cancel_event is set by the downloader on shutdown.
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+
+    def _run(self):
+        # Fetch once immediately
+        self._poll_once()
+        while not self._cancel_event.wait(self._poll_interval):
+            self._poll_once()
+
+    def _poll_once(self):
+        stats = ServerStats()
+        try:
+            live = fetch_live_stats()
+            stats.server_running = live.server_running
+            stats.server_queued = live.server_queued
+            stats.running_users = live.running_users
+        except Exception:
+            log.debug("Failed to fetch /live stats", exc_info=True)
+
+        try:
+            stats.system_status = fetch_system_status()
+        except Exception:
+            log.debug("Failed to fetch system status", exc_info=True)
+
+        current = (
+            stats.server_running,
+            stats.server_queued,
+            stats.running_users,
+            stats.system_status,
+        )
+        if current != self._last:
+            self._last = current
+            self._adapter.on_server_stats_update(
+                stats.server_running,
+                stats.server_queued,
+                stats.running_users,
+                stats.system_status,
+            )

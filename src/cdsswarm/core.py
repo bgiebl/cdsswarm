@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 import cdsapi
-from ._cds_metadata import MetadataPoller
+from ._cds_metadata import LiveScraper, MetadataPoller
 from ._cds_utils import (
     cancel_cds_request,
     find_reusable_jobs,
@@ -199,6 +199,10 @@ class SwarmDownloader:
             self._adapter, state, self._cancel_event, poll_interval=10.0
         )
         poller.start()
+        live_scraper = LiveScraper(
+            self._adapter, self._cancel_event, poll_interval=60.0
+        )
+        live_scraper.start()
         self._pool = pool = ThreadPoolExecutor(max_workers=self._num_workers)
         futures = {
             pool.submit(
@@ -267,6 +271,7 @@ class SwarmDownloader:
             pool.shutdown(wait=True)
         finally:
             poller.stop()
+            live_scraper.stop()
             self._pool = None
             self._state = None
             uninstall_progress_router(router_state)

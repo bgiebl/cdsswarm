@@ -106,6 +106,15 @@ class OutputAdapter(ABC):
     def on_task_hook_finished(self, worker_id: int, success: bool, warning: str = ""):
         pass
 
+    def on_server_stats_update(
+        self,
+        server_running: int,
+        server_queued: int,
+        running_users: int,
+        system_status: str,
+    ):
+        pass
+
     def on_tasks_initialized(self, tasks: list[Task], skipped_targets: set[str]):
         pass
 
@@ -252,6 +261,23 @@ class PlainTextAdapter(OutputAdapter):
         if queued > 0 or running > 0:
             self._write(f"  [CDS server] {queued} queued | {running}/{limit} running")
 
+    def on_server_stats_update(
+        self, server_running, server_queued, running_users, system_status
+    ):
+        key = (server_running, server_queued, running_users, system_status)
+        with self._lock:
+            if key == getattr(self, "_last_server_stats", None):
+                return
+            self._last_server_stats = key
+        parts = [
+            f"{server_queued} queued",
+            f"{server_running} running",
+            f"{running_users} users",
+        ]
+        if system_status:
+            parts.append(f"Status: {system_status}")
+        self._write(f"  [CDS global] {' | '.join(parts)}")
+
 
 class TextualAdapter(OutputAdapter):
     """Routes events to the Textual TUI via call_from_thread."""
@@ -366,6 +392,17 @@ class TextualAdapter(OutputAdapter):
 
         self._post(QosUpdate(queued, running, limit))
 
+    def on_server_stats_update(
+        self, server_running, server_queued, running_users, system_status
+    ):
+        from .textual_app import ServerStatsUpdate
+
+        self._post(
+            ServerStatsUpdate(
+                server_running, server_queued, running_users, system_status
+            )
+        )
+
     def on_global_message(self, message):
         from .textual_app import GlobalMessage
 
@@ -454,3 +491,14 @@ class LoggingAdapter(OutputAdapter):
     def on_qos_update(self, queued, running, limit):
         self._write(f"qos: queued={queued} running={running} limit={limit}")
         self._inner.on_qos_update(queued, running, limit)
+
+    def on_server_stats_update(
+        self, server_running, server_queued, running_users, system_status
+    ):
+        self._write(
+            f"server stats: queued={server_queued} running={server_running} "
+            f"users={running_users} status={system_status}"
+        )
+        self._inner.on_server_stats_update(
+            server_running, server_queued, running_users, system_status
+        )

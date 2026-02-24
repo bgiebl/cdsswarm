@@ -238,6 +238,21 @@ class QosUpdate(Message):
         self.limit = limit
 
 
+class ServerStatsUpdate(Message):
+    def __init__(
+        self,
+        server_running: int,
+        server_queued: int,
+        running_users: int,
+        system_status: str,
+    ) -> None:
+        super().__init__()
+        self.server_running = server_running
+        self.server_queued = server_queued
+        self.running_users = running_users
+        self.system_status = system_status
+
+
 class FileActive(Message):
     def __init__(self, target: str, worker_id: int) -> None:
         super().__init__()
@@ -407,6 +422,10 @@ class MeterBar(Static):
         qos_queued: int,
         qos_running: int,
         qos_limit: int,
+        server_running: int = 0,
+        server_queued: int = 0,
+        running_users: int = 0,
+        system_status: str = "",
     ) -> str:
         grand_total = total + skipped
         grand_done = completed + skipped
@@ -439,6 +458,23 @@ class MeterBar(Static):
                 f"CDS Server: {qos_queued} queued \u2502 "
                 f"{qos_running}/{qos_limit} running"
             )
+
+        # Server-wide stats
+        if server_queued > 0 or server_running > 0:
+            dot = ""
+            if system_status:
+                status_lower = system_status.lower()
+                if status_lower == "ok":
+                    dot = "[green]\u25cf[/] "
+                elif status_lower == "degraded":
+                    dot = "[yellow]\u25cf[/] "
+                elif status_lower == "down":
+                    dot = "[red]\u25cf[/] "
+            parts.append(
+                f"{dot}Server: {server_queued} queued \u2502 "
+                f"{server_running} running \u2502 {running_users} users"
+            )
+
         if status:
             parts.append(status)
         status_line = " \u2502 ".join(parts) if parts else ""
@@ -742,6 +778,10 @@ class CdsswarmApp(App):
         self.qos_queued = 0
         self.qos_running = 0
         self.qos_limit = 0
+        self.server_running = 0
+        self.server_queued = 0
+        self.server_running_users = 0
+        self.server_system_status = ""
 
         # Tab state
         self._active_tab = "workers"
@@ -1015,6 +1055,13 @@ class CdsswarmApp(App):
         self.qos_limit = msg.limit
         self._update_meter_bar()
 
+    def on_server_stats_update(self, msg: ServerStatsUpdate) -> None:
+        self.server_running = msg.server_running
+        self.server_queued = msg.server_queued
+        self.server_running_users = msg.running_users
+        self.server_system_status = msg.system_status
+        self._update_meter_bar()
+
     def on_file_active(self, msg: FileActive) -> None:
         if msg.target in self.file_index:
             idx = self.file_index[msg.target]
@@ -1182,5 +1229,9 @@ class CdsswarmApp(App):
                 self.qos_queued,
                 self.qos_running,
                 self.qos_limit,
+                self.server_running,
+                self.server_queued,
+                self.server_running_users,
+                self.server_system_status,
             )
         )

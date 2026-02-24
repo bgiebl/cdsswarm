@@ -22,6 +22,7 @@ from cdsswarm.textual_app import (
     GlobalMessage,
     ProgressUpdate,
     QosUpdate,
+    ServerStatsUpdate,
     TasksInitialized,
     WorkerCdsStatus,
     WorkerFinished,
@@ -201,6 +202,14 @@ class DemoApp(CdsswarmApp):
         _post(ProgressUpdate(0, num_tasks - num_cached, num_cached))
         _post(GlobalMessage(f"Downloading {num_tasks} files ({num_workers} workers)"))
         _post(QosUpdate(random.randint(3000, 6000), random.randint(380, 400), 400))
+        _post(
+            ServerStatsUpdate(
+                random.randint(400, 500),
+                random.randint(3000, 5000),
+                random.randint(300, 450),
+                "Ok",
+            )
+        )
 
         active = {}
         task_idx = 0
@@ -249,6 +258,14 @@ class DemoApp(CdsswarmApp):
                         random.randint(3000, 6000),
                         random.randint(380, 400),
                         400,
+                    )
+                )
+                _post(
+                    ServerStatsUpdate(
+                        random.randint(400, 500),
+                        random.randint(3000, 5000),
+                        random.randint(300, 450),
+                        random.choice(["Ok", "Ok", "Ok", "Degraded"]),
                     )
                 )
 
