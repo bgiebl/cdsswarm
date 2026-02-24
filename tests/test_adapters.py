@@ -46,10 +46,6 @@ class TestOutputAdapterDefaults:
         adapter = _NoOpAdapter()
         adapter.on_task_cancelled(0)
 
-    def test_on_task_server_progress(self):
-        adapter = _NoOpAdapter()
-        adapter.on_task_server_progress(0, 50)
-
     def test_on_task_file_size(self):
         adapter = _NoOpAdapter()
         adapter.on_task_file_size(0, 1024 * 1024)
@@ -441,12 +437,6 @@ class TestLoggingAdapter:
         assert "cancelled" in log_file.getvalue()
         inner.on_task_cancelled.assert_called_once_with(0)
 
-    def test_on_task_server_progress(self):
-        adapter, inner, log_file = self._make_adapter()
-        adapter.on_task_server_progress(0, 75)
-        assert "server progress: 75%" in log_file.getvalue()
-        inner.on_task_server_progress.assert_called_once_with(0, 75)
-
     def test_on_task_file_size(self):
         adapter, inner, log_file = self._make_adapter()
         adapter.on_task_file_size(0, 1024)
@@ -662,16 +652,6 @@ class TestTextualAdapter:
         assert len(msgs) == 1
         assert isinstance(msgs[0], WorkerCancelled)
         assert msgs[0].worker_id == 1
-
-    def test_on_task_server_progress(self):
-        from cdsswarm.textual_app import WorkerServerProgress
-
-        adapter, app = self._make_adapter()
-        adapter.on_task_server_progress(0, 75)
-        msgs = self._posted_messages(app)
-        assert len(msgs) == 1
-        assert isinstance(msgs[0], WorkerServerProgress)
-        assert msgs[0].progress == 75
 
     def test_on_task_file_size(self):
         from cdsswarm.textual_app import WorkerFileSize

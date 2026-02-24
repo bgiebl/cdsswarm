@@ -21,7 +21,6 @@ class TestParsJobMetadata:
     def test_full_response(self):
         data = {
             "jobID": "test-123",
-            "progress": 72,
             "created": "2024-01-01T00:00:00Z",
             "started": "2024-01-01T00:05:00Z",
             "finished": "",
@@ -43,7 +42,6 @@ class TestParsJobMetadata:
         }
         meta = _parse_job_metadata(data, "test-123")
         assert meta.job_id == "test-123"
-        assert meta.progress == 72
         assert meta.created == "2024-01-01T00:00:00Z"
         assert meta.started == "2024-01-01T00:05:00Z"
         assert meta.finished == ""
@@ -55,7 +53,6 @@ class TestParsJobMetadata:
         data = {"jobID": "test-456"}
         meta = _parse_job_metadata(data, "test-456")
         assert meta.job_id == "test-456"
-        assert meta.progress == 0
         assert meta.created == ""
         assert meta.dataset_title == ""
         assert meta.request_labels == {}
@@ -63,7 +60,6 @@ class TestParsJobMetadata:
 
     def test_null_values(self):
         data = {
-            "progress": None,
             "created": None,
             "started": None,
             "metadata": {
@@ -72,7 +68,6 @@ class TestParsJobMetadata:
             },
         }
         meta = _parse_job_metadata(data, "x")
-        assert meta.progress == 0
         assert meta.created == ""
         assert meta.started == ""
         assert meta.dataset_title == ""
@@ -167,7 +162,7 @@ class TestFetchJobMetadata:
         inner.verify = True
         inner._get_headers.return_value = {"Authorization": "Bearer token"}
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {"jobID": "test-id", "progress": 50}
+        mock_resp.json.return_value = {"jobID": "test-id"}
         mock_requests.get.return_value = mock_resp
 
         with patch("cdsswarm._cds_metadata.ds_config", create=True):
@@ -176,7 +171,6 @@ class TestFetchJobMetadata:
         call_url = mock_requests.get.call_args[0][0]
         assert "jobs/test-id" in call_url
         assert qos is None
-        assert meta.progress == 50
 
     @patch("cdsswarm._cds_metadata.http_requests")
     def test_with_qos_and_request(self, mock_requests):
@@ -264,7 +258,6 @@ class TestMetadataPoller:
 
         meta = JobMetadata(
             job_id="rid-1",
-            progress=50,
             dataset_title="ERA5",
             request_labels={"Variable": "T"},
             file_size=1000,
@@ -279,7 +272,6 @@ class TestMetadataPoller:
 
         poller._poll_once(inner)
 
-        adapter.on_task_server_progress.assert_called_with(0, 50)
         adapter.on_task_file_size.assert_called_with(0, 1000)
         adapter.on_task_dataset_title.assert_called_with(0, "ERA5")
         adapter.on_task_request_labels.assert_called_with(0, {"Variable": "T"})
@@ -294,7 +286,7 @@ class TestMetadataPoller:
         state.task_worker_map = {"target.grib": 0}
         cancel = threading.Event()
 
-        meta = JobMetadata(job_id="rid-1", progress=50)
+        meta = JobMetadata(job_id="rid-1", file_size=1000)
         mock_fetch.return_value = (meta, None)
 
         poller = MetadataPoller(adapter, state, cancel)
@@ -302,12 +294,12 @@ class TestMetadataPoller:
         poller._inner_client = inner
 
         poller._poll_once(inner)
-        adapter.on_task_server_progress.assert_called_once()
+        adapter.on_task_file_size.assert_called_once()
 
         # Poll again with same data — should not fire again
         adapter.reset_mock()
         poller._poll_once(inner)
-        adapter.on_task_server_progress.assert_not_called()
+        adapter.on_task_file_size.assert_not_called()
 
     @patch("cdsswarm._cds_metadata.fetch_job_metadata")
     def test_poll_handles_exception(self, mock_fetch):
@@ -326,7 +318,6 @@ class TestMetadataPoller:
 
         # Should not raise
         poller._poll_once(inner)
-        adapter.on_task_server_progress.assert_not_called()
 
     def test_poll_skips_when_no_client(self):
         adapter = MagicMock()
@@ -339,7 +330,7 @@ class TestMetadataPoller:
         cancel.set()
         poller._thread.join(timeout=2)
         # No client registered, so no callbacks should have fired
-        adapter.on_task_server_progress.assert_not_called()
+        adapter.on_task_file_size.assert_not_called()
 
     @patch("cdsswarm._cds_metadata.fetch_job_metadata")
     def test_run_polls_with_registered_client(self, mock_fetch):
@@ -351,7 +342,7 @@ class TestMetadataPoller:
         state.task_worker_map = {"target.grib": 0}
         cancel = threading.Event()
 
-        meta = JobMetadata(job_id="rid-1", progress=50)
+        meta = JobMetadata(job_id="rid-1", file_size=1000)
         mock_fetch.return_value = (meta, None)
 
         poller = MetadataPoller(adapter, state, cancel, poll_interval=0.05)
@@ -369,7 +360,7 @@ class TestMetadataPoller:
 
         # _poll_once was called via _run with the registered inner client
         mock_fetch.assert_called()
-        adapter.on_task_server_progress.assert_called()
+        adapter.on_task_file_size.assert_called()
 
     def test_poll_once_no_active_requests(self):
         """Empty active_requests → early return, no fetch calls."""
@@ -418,7 +409,7 @@ class TestMetadataPoller:
         ):
             poller._poll_once(inner)  # Should not raise
 
-        adapter.on_task_server_progress.assert_not_called()
+        adapter.on_task_file_size.assert_not_called()
 
 
 class TestFetchImportFallback:

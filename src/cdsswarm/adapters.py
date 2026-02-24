@@ -83,9 +83,6 @@ class OutputAdapter(ABC):
     def on_task_cancelled(self, worker_id: int):
         pass
 
-    def on_task_server_progress(self, worker_id: int, progress: int):
-        pass
-
     def on_task_file_size(self, worker_id: int, file_size: int):
         pass
 
@@ -333,11 +330,6 @@ class TextualAdapter(OutputAdapter):
 
         self._post(WorkerCancelled(worker_id))
 
-    def on_task_server_progress(self, worker_id, progress):
-        from .textual_app import WorkerServerProgress
-
-        self._post(WorkerServerProgress(worker_id, progress))
-
     def on_task_file_size(self, worker_id, file_size):
         from .textual_app import WorkerFileSize
 
@@ -430,10 +422,6 @@ class LoggingAdapter(OutputAdapter):
     def on_task_cancelled(self, worker_id):
         self._write(f"[worker {worker_id}] cancelled")
         self._inner.on_task_cancelled(worker_id)
-
-    def on_task_server_progress(self, worker_id, progress):
-        self._write(f"[worker {worker_id}] server progress: {progress}%")
-        self._inner.on_task_server_progress(worker_id, progress)
 
     def on_task_file_size(self, worker_id, file_size):
         self._write(f"[worker {worker_id}] file size: {file_size}")

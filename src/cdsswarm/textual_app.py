@@ -75,7 +75,6 @@ class WorkerData:
     target: str = ""
     request_params: dict = field(default_factory=dict)
     logs: deque = field(default_factory=lambda: deque(maxlen=100))
-    server_progress: int | None = None
     file_size: int | None = None
     server_created: str | None = None
     server_started: str | None = None
@@ -96,7 +95,6 @@ class WorkerData:
         self.target = ""
         self.request_params = {}
         self.logs.clear()
-        self.server_progress = None
         self.file_size = None
         self.server_created = None
         self.server_started = None
@@ -177,13 +175,6 @@ class WorkerFinished(Message):
         self.worker_id = worker_id
         self.success = success
         self.error = error
-
-
-class WorkerServerProgress(Message):
-    def __init__(self, worker_id: int, progress: int) -> None:
-        super().__init__()
-        self.worker_id = worker_id
-        self.progress = progress
 
 
 class WorkerFileSize(Message):
@@ -571,7 +562,6 @@ class ParamsScreen(Screen):
 WORKER_COLUMNS = [
     ("W", 4),
     ("Status", 12),
-    ("Prog", 6),
     ("Filename", 20),
     ("Started", 10),
     ("Elapsed", 10),
@@ -800,7 +790,6 @@ class CdsswarmApp(App):
             wt.add_row(
                 str(i),
                 styled_status(WorkerStatus.IDLE),
-                "---",
                 "\u2014",
                 "\u2014",
                 "\u2014",
@@ -858,7 +847,6 @@ class CdsswarmApp(App):
         w.dl_bytes = 0
         w.dl_total = 0
         w.logs.clear()
-        w.server_progress = None
         w.file_size = None
         w.server_created = None
         w.server_started = None
@@ -871,7 +859,6 @@ class CdsswarmApp(App):
         wt.update_cell(
             str(msg.worker_id), "Status", styled_status(WorkerStatus.ACCEPTED)
         )
-        wt.update_cell(str(msg.worker_id), "Prog", "---")
         wt.update_cell(str(msg.worker_id), "Filename", msg.filename)
         wt.update_cell(
             str(msg.worker_id),
@@ -952,12 +939,6 @@ class CdsswarmApp(App):
             if msg.error:
                 w.logs.append(f"FAILED: {msg.error}")
         self._update_worker_info()
-
-    def on_worker_server_progress(self, msg: WorkerServerProgress) -> None:
-        w = self.worker_data[msg.worker_id]
-        w.server_progress = msg.progress
-        wt = self.query_one("#worker-table", DataTable)
-        wt.update_cell(str(msg.worker_id), "Prog", f"{msg.progress}%")
 
     def on_worker_file_size(self, msg: WorkerFileSize) -> None:
         w = self.worker_data[msg.worker_id]

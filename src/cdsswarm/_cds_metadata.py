@@ -16,7 +16,6 @@ class JobMetadata:
     """Parsed metadata for a single CDS job."""
 
     job_id: str = ""
-    progress: int = 0
     created: str = ""
     started: str = ""
     finished: str = ""
@@ -82,7 +81,6 @@ def fetch_job_metadata(
 def _parse_job_metadata(data: dict, job_id: str) -> JobMetadata:
     """Extract JobMetadata fields from a job status response."""
     meta = JobMetadata(job_id=job_id)
-    meta.progress = data.get("progress", 0) or 0
     meta.created = data.get("created", "") or ""
     meta.started = data.get("started", "") or ""
     meta.finished = data.get("finished", "") or ""
@@ -222,10 +220,6 @@ class MetadataPoller:
     def _dispatch_updates(self, wid: int, rid: str, meta: JobMetadata):
         """Fire adapter callbacks only when values change."""
         known = self._known_metadata.get(rid, {})
-
-        if meta.progress != known.get("progress"):
-            self._adapter.on_task_server_progress(wid, meta.progress)
-            known["progress"] = meta.progress
 
         if meta.file_size and meta.file_size != known.get("file_size"):
             self._adapter.on_task_file_size(wid, meta.file_size)

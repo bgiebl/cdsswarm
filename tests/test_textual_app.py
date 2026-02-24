@@ -30,7 +30,6 @@ from cdsswarm.textual_app import (
     WorkerProgress,
     WorkerRequestId,
     WorkerRequestLabels,
-    WorkerServerProgress,
     WorkerServerTimestamps,
     WorkerStarted,
     WorkerCancelled,
@@ -245,18 +244,6 @@ async def test_worker_finished_failure_shows_cross():
         row = wt.get_row("0")
         assert any("\u2717" in str(cell) for cell in row)
         assert "FAILED: timeout" in app.worker_data[0].logs
-
-
-@pytest.mark.asyncio
-async def test_worker_server_progress():
-    """WorkerServerProgress updates Prog column."""
-    app = CdsswarmApp(num_workers=2)
-    async with app.run_test() as pilot:
-        app.post_message(WorkerServerProgress(0, 72))
-        await pilot.pause()
-        wt = app.query_one("#worker-table", DataTable)
-        row = wt.get_row("0")
-        assert any("72%" in str(cell) for cell in row)
 
 
 @pytest.mark.asyncio
@@ -757,7 +744,7 @@ async def test_tick_elapsed_updates_table():
         await pilot.pause()
         wt = app.query_one("#worker-table", DataTable)
         row = wt.get_row("0")
-        elapsed_cell = str(row[5])  # Elapsed is index 5
+        elapsed_cell = str(row[4])  # Elapsed is index 4
         assert "m" in elapsed_cell or "s" in elapsed_cell
 
 
@@ -774,7 +761,7 @@ async def test_worker_finished_dl_pct():
         await pilot.pause()
         wt = app.query_one("#worker-table", DataTable)
         row = wt.get_row("0")
-        dl_pct_cell = str(row[7])  # DL % is index 7
+        dl_pct_cell = str(row[6])  # DL % is index 6
         assert "\u2713" in dl_pct_cell
 
 

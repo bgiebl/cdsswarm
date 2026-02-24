@@ -29,7 +29,6 @@ from cdsswarm.textual_app import (
     WorkerProgress,
     WorkerRequestId,
     WorkerRequestLabels,
-    WorkerServerProgress,
     WorkerServerTimestamps,
     WorkerStarted,
     WorkerDatasetTitle,
@@ -219,7 +218,6 @@ class DemoApp(CdsswarmApp):
             _post(WorkerRequestId(wid, rid))
             _post(WorkerDatasetTitle(wid, DATASET_TITLES.get(dataset, "")))
             _post(WorkerRequestLabels(wid, labels))
-            _post(WorkerServerProgress(wid, 0))
             _post(FileActive(target, wid))
             now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             _post(WorkerServerTimestamps(wid, now, "", ""))
@@ -233,7 +231,6 @@ class DemoApp(CdsswarmApp):
                 "dl_bytes": 0,
                 "phase": 0,
                 "phase_ticks": 0,
-                "server_progress": 0,
                 "server_created": now,
             }
             return True
@@ -275,29 +272,21 @@ class DemoApp(CdsswarmApp):
                     )
                     _post(WorkerMessage(wid, "status has been updated to running"))
 
-                elif phase == 1:
-                    state["server_progress"] = min(
-                        100, state["server_progress"] + random.randint(2, 8)
+                elif phase == 1 and state["phase_ticks"] >= random.randint(8, 20):
+                    state["phase"] = 2
+                    state["phase_ticks"] = 0
+                    _post(WorkerCdsStatus(wid, WorkerStatus.SUCCESSFUL))
+                    _post(WorkerFileSize(wid, state["size"]))
+                    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    _post(
+                        WorkerServerTimestamps(
+                            wid,
+                            state["server_created"],
+                            state.get("server_started", ""),
+                            now,
+                        )
                     )
-                    _post(WorkerServerProgress(wid, state["server_progress"]))
-                    if state["server_progress"] >= 100:
-                        state["phase"] = 2
-                        state["phase_ticks"] = 0
-                        _post(WorkerCdsStatus(wid, WorkerStatus.SUCCESSFUL))
-                        _post(WorkerServerProgress(wid, 100))
-                        _post(WorkerFileSize(wid, state["size"]))
-                        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                        _post(
-                            WorkerServerTimestamps(
-                                wid,
-                                state["server_created"],
-                                state.get("server_started", ""),
-                                now,
-                            )
-                        )
-                        _post(
-                            WorkerMessage(wid, "status has been updated to successful")
-                        )
+                    _post(WorkerMessage(wid, "status has been updated to successful"))
 
                 elif phase == 2 and state["phase_ticks"] >= random.randint(2, 5):
                     state["phase"] = 3
