@@ -79,6 +79,10 @@ class TestOutputAdapterDefaults:
         tasks = [Task("ds", {}, "file.grib")]
         adapter.on_tasks_initialized(tasks, set())
 
+    def test_on_server_stats_update(self):
+        adapter = _NoOpAdapter()
+        adapter.on_server_stats_update(5, 10, 3, "OK")
+
 
 class TestPlainTextAdapter:
     def test_completed_message(self):
@@ -381,6 +385,30 @@ class TestPlainTextAdapter:
         adapter.on_task_hook_finished(0, False, "exit code 1")
         assert "\033[1;38;5;208m" in messages[0]
 
+    def test_server_stats_update(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append)
+        adapter.on_server_stats_update(5, 10, 3, "OK")
+        assert len(messages) == 1
+        assert "10 queued" in messages[0]
+        assert "5 running" in messages[0]
+        assert "3 users" in messages[0]
+        assert "Status: OK" in messages[0]
+
+    def test_server_stats_update_deduplicated(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append)
+        adapter.on_server_stats_update(5, 10, 3, "")
+        adapter.on_server_stats_update(5, 10, 3, "")
+        assert len(messages) == 1
+
+    def test_server_stats_update_change_emits(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append)
+        adapter.on_server_stats_update(5, 10, 3, "")
+        adapter.on_server_stats_update(6, 10, 3, "")
+        assert len(messages) == 2
+
 
 class TestLoggingAdapter:
     def _make_adapter(self):
@@ -453,6 +481,17 @@ class TestLoggingAdapter:
         assert "FAILED" in log
         assert "exit code 1" in log
         inner.on_task_hook_finished.assert_called_once_with(0, False, "exit code 1")
+
+    def test_on_server_stats_update(self):
+        adapter, inner, log_file = self._make_adapter()
+        adapter.on_server_stats_update(5, 10, 3, "OK")
+        log = log_file.getvalue()
+        assert "server stats" in log
+        assert "queued=10" in log
+        assert "running=5" in log
+        assert "users=3" in log
+        assert "status=OK" in log
+        inner.on_server_stats_update.assert_called_once_with(5, 10, 3, "OK")
 
 
 class TestTextualAdapter:
@@ -693,6 +732,19 @@ class TestTextualAdapter:
         assert len(msgs) == 1
         assert isinstance(msgs[0], GlobalMessage)
         assert msgs[0].message == "All downloads completed"
+
+    def test_on_server_stats_update(self):
+        from cdsswarm.textual_app import ServerStatsUpdate
+
+        adapter, app = self._make_adapter()
+        adapter.on_server_stats_update(5, 10, 3, "OK")
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], ServerStatsUpdate)
+        assert msgs[0].server_running == 5
+        assert msgs[0].server_queued == 10
+        assert msgs[0].running_users == 3
+        assert msgs[0].system_status == "OK"
 
     def test_post_ignores_runtime_error_when_app_stopped(self):
         """_post silently ignores RuntimeError when the app is no longer running."""

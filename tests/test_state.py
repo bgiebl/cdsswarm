@@ -295,3 +295,38 @@ class TestSessionState:
         session.mark_failed(tasks[0].target, "err", 10.0, 20.0)
         pending = session.pending_targets()
         assert tasks[0].target in pending
+
+    def test_clear_stale_request_ids_clears_pending_and_failed(self, tmp_dir):
+        """clear_stale_request_ids clears IDs for pending and failed tasks."""
+        tasks = _make_tasks(tmp_dir, count=3)
+        session = SessionState.new("requests.json", tasks)
+        session.set_request_id(tasks[0].target, "rid-0")
+        session.set_request_id(tasks[1].target, "rid-1")
+        session.set_request_id(tasks[2].target, "rid-2")
+        session.mark_failed(tasks[1].target, "dismissed", 10.0, 20.0)
+
+        cleared = session.clear_stale_request_ids()
+        assert cleared == 3  # all non-completed
+        for ts in session.tasks.values():
+            assert ts.cds_request_id == ""
+
+    def test_clear_stale_request_ids_preserves_completed(self, tmp_dir):
+        """clear_stale_request_ids does not touch completed tasks."""
+        tasks = _make_tasks(tmp_dir, count=2)
+        session = SessionState.new("requests.json", tasks)
+        session.set_request_id(tasks[0].target, "rid-0")
+        session.set_request_id(tasks[1].target, "rid-1")
+        with open(tasks[0].target, "w") as f:
+            f.write("data")
+        session.mark_completed(tasks[0].target, 10.0, 20.0, 1024)
+
+        cleared = session.clear_stale_request_ids()
+        assert cleared == 1  # only the pending one
+        assert session.tasks[tasks[0].target].cds_request_id == "rid-0"
+        assert session.tasks[tasks[1].target].cds_request_id == ""
+
+    def test_clear_stale_request_ids_empty_when_nothing_to_clear(self, tmp_dir):
+        """clear_stale_request_ids returns 0 when no IDs to clear."""
+        tasks = _make_tasks(tmp_dir, count=1)
+        session = SessionState.new("requests.json", tasks)
+        assert session.clear_stale_request_ids() == 0

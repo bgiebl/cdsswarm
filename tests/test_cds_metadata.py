@@ -5,13 +5,18 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import requests as http_requests
 
 from cdsswarm._cds_metadata import (
     JobMetadata,
+    LiveScraper,
     MetadataPoller,
     _parse_job_metadata,
     fetch_job_metadata,
+    fetch_live_stats,
+    fetch_system_status,
 )
 
 
@@ -339,3 +344,107 @@ class TestFetchImportFallback:
                 fetch_job_metadata(inner, "test-id")
             url = mock_req.get.call_args[0][0]
             assert "/v1/" in url
+
+
+class TestFetchLiveStats:
+    @patch("cdsswarm._cds_metadata.http_requests")
+    def test_missing_next_data_raises(self, mock_requests):
+        """Raises ValueError when __NEXT_DATA__ script tag is absent."""
+        mock_resp = MagicMock()
+        mock_resp.text = "<html><body>No data here</body></html>"
+        mock_requests.get.return_value = mock_resp
+        with pytest.raises(ValueError, match="__NEXT_DATA__ not found"):
+            fetch_live_stats()
+
+    @patch("cdsswarm._cds_metadata.http_requests")
+    def test_parses_stats(self, mock_requests):
+        """Parses running/queued/users from __NEXT_DATA__ JSON."""
+        import json
+
+        data = {
+            "props": {
+                "pageProps": {
+                    "statisticData": {
+                        "running_requests": 5,
+                        "queued_requests": 10,
+                        "running_users": 3,
+                    }
+                }
+            }
+        }
+        mock_resp = MagicMock()
+        mock_resp.text = (
+            f'<script id="__NEXT_DATA__" type="application/json">'
+            f"{json.dumps(data)}</script>"
+        )
+        mock_requests.get.return_value = mock_resp
+        stats = fetch_live_stats()
+        assert stats.server_running == 5
+        assert stats.server_queued == 10
+        assert stats.running_users == 3
+
+
+class TestFetchSystemStatus:
+    @patch("cdsswarm._cds_metadata.http_requests")
+    def test_returns_empty_when_no_data_stores(self, mock_requests):
+        """Returns empty string when 'Data Stores' node is absent."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "nodes": [{"node": {"Title": "Other Service", "Status": "OK"}}]
+        }
+        mock_requests.get.return_value = mock_resp
+        assert fetch_system_status() == ""
+
+    @patch("cdsswarm._cds_metadata.http_requests")
+    def test_returns_status(self, mock_requests):
+        """Returns status string for 'Data Stores' node."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "nodes": [{"node": {"Title": "Data Stores", "Status": "OK"}}]
+        }
+        mock_requests.get.return_value = mock_resp
+        assert fetch_system_status() == "OK"
+
+
+class TestLiveScraper:
+    @patch("cdsswarm._cds_metadata.fetch_system_status")
+    @patch("cdsswarm._cds_metadata.fetch_live_stats")
+    def test_both_fail_skips_callback(self, mock_live, mock_status):
+        """When both fetches fail, adapter is not called."""
+        mock_live.side_effect = RuntimeError("network error")
+        mock_status.side_effect = RuntimeError("network error")
+        adapter = MagicMock()
+        cancel = threading.Event()
+        scraper = LiveScraper(adapter, cancel)
+        scraper._poll_once()
+        adapter.on_server_stats_update.assert_not_called()
+
+    @patch("cdsswarm._cds_metadata.fetch_system_status")
+    @patch("cdsswarm._cds_metadata.fetch_live_stats")
+    def test_live_fails_status_succeeds(self, mock_live, mock_status):
+        """When live fetch fails but status succeeds, callback fires."""
+
+        mock_live.side_effect = RuntimeError("network error")
+        mock_status.return_value = "OK"
+        adapter = MagicMock()
+        cancel = threading.Event()
+        scraper = LiveScraper(adapter, cancel)
+        scraper._poll_once()
+        adapter.on_server_stats_update.assert_called_once_with(0, 0, 0, "OK")
+
+    @patch("cdsswarm._cds_metadata.fetch_system_status")
+    @patch("cdsswarm._cds_metadata.fetch_live_stats")
+    def test_run_polls_then_stops(self, mock_live, mock_status):
+        """_run fetches once immediately, then polls until cancelled."""
+        from cdsswarm._cds_metadata import ServerStats
+
+        mock_live.return_value = ServerStats(server_running=1, server_queued=2)
+        mock_status.return_value = ""
+        adapter = MagicMock()
+        cancel = threading.Event()
+        scraper = LiveScraper(adapter, cancel, poll_interval=0.05)
+        scraper.start()
+        time.sleep(0.15)
+        cancel.set()
+        scraper.stop()
+        assert adapter.on_server_stats_update.call_count >= 1

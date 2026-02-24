@@ -353,7 +353,7 @@ class SwarmDownloader:
                             client.retrieve(task.dataset, task.request, task.target)
                     else:
                         client.retrieve(task.dataset, task.request, task.target)
-                except Exception:
+                except Exception as exc:
                     with state.lock:
                         state.active_requests.pop(task.target, None)
                     if attempt >= self._max_retries or self._cancel_event.is_set():
@@ -361,7 +361,7 @@ class SwarmDownloader:
                     delay = min(2 ** (attempt - 1), 60)
                     self._adapter.on_task_message(
                         wid,
-                        f"Attempt {attempt}/{self._max_retries} failed, "
+                        f"Attempt {attempt}/{self._max_retries} failed: {exc}, "
                         f"retrying in {delay}s...",
                     )
                     reuse_id = None  # don't reuse a broken job

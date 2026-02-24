@@ -677,6 +677,7 @@ def main(argv: list[str] | None = None):
             print("All tasks already completed (from previous session).")
             sys.exit(0)
         tasks = [t for t in tasks if t.target in pending_set]
+        session.clear_stale_request_ids()
         saved_reuse = session.reuse_map()
         total = len(session.tasks)
         remaining = len(tasks)

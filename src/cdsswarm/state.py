@@ -173,6 +173,20 @@ class SessionState:
                 result.append(target)
         return result
 
+    def clear_stale_request_ids(self) -> int:
+        """Clear request IDs for incomplete tasks (likely dismissed on the server).
+
+        After a cancelled session, in-flight CDS jobs are dismissed but their
+        request IDs remain in the session state.  Reusing dismissed IDs wastes
+        retry attempts, so clear them on resume.  Returns the number cleared.
+        """
+        cleared = 0
+        for ts in self.tasks.values():
+            if ts.status != "completed" and ts.cds_request_id:
+                ts.cds_request_id = ""
+                cleared += 1
+        return cleared
+
     def reuse_map(self) -> dict[str, str]:
         """Return {target: cds_request_id} for pending tasks with known IDs."""
         result = {}

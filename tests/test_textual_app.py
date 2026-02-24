@@ -18,6 +18,7 @@ from cdsswarm.textual_app import (
     MeterBar,
     ParamsScreen,
     ProgressUpdate,
+    ServerStatsUpdate,
     TasksInitialized,
     WorkerCdsStatus,
     WorkerData,
@@ -869,3 +870,46 @@ async def test_update_worker_info_no_selection():
             await pilot.pause()
         panel = app.query_one("#worker-info", WorkerInfoPanel)
         assert "No worker selected" in str(panel.content)
+
+
+# ---------------------------------------------------------------------------
+# Group F: ServerStatsUpdate (covers textual_app lines 241-245, 448-457, 1034-1038)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_server_stats_update():
+    """ServerStatsUpdate updates app state and meter bar."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        app.post_message(ServerStatsUpdate(5, 10, 3, "OK"))
+        await pilot.pause()
+        assert app.server_running == 5
+        assert app.server_queued == 10
+        assert app.server_running_users == 3
+        assert app.server_system_status == "OK"
+
+
+@pytest.mark.asyncio
+async def test_server_stats_meter_bar_status_dots():
+    """MeterBar renders colored dots for different system statuses."""
+    meter = MeterBar()
+    for status, expected_color in [
+        ("OK", "[green]"),
+        ("Degraded", "[yellow]"),
+        ("Down", "[red]"),
+    ]:
+        result = meter.render_progress(
+            completed=1,
+            total=10,
+            skipped=0,
+            eta_start=time.monotonic() - 10,
+            status="",
+            server_queued=5,
+            server_running=2,
+            running_users=1,
+            system_status=status,
+        )
+        assert expected_color in result
+        assert "5 queued" in result
+        assert "2 running" in result
