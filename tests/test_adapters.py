@@ -392,7 +392,6 @@ class TestPlainTextAdapter:
         assert len(messages) == 1
         assert "10 queued" in messages[0]
         assert "5 running" in messages[0]
-        assert "3 users" in messages[0]
         assert "Status: OK" in messages[0]
 
     def test_server_stats_update_deduplicated(self):

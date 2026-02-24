@@ -259,7 +259,6 @@ class PlainTextAdapter(OutputAdapter):
         parts = [
             f"{server_queued} queued",
             f"{server_running} running",
-            f"{running_users} users",
         ]
         if system_status:
             parts.append(f"Status: {system_status}")

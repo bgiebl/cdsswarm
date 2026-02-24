@@ -455,8 +455,7 @@ class MeterBar(Static):
                 elif status_lower == "down":
                     dot = "[red]\u25cf[/] "
             parts.append(
-                f"{dot}Server: {server_queued} queued \u2502 "
-                f"{server_running} running \u2502 {running_users} users"
+                f"{dot}Server: {server_queued} queued \u2502 {server_running} running"
             )
 
         if status:

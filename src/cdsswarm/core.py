@@ -176,6 +176,8 @@ class SwarmDownloader:
                         self._adapter.on_global_message(
                             f"Found {len(api_reuse)} reusable job(s)"
                         )
+                    else:
+                        self._adapter.on_global_message("")
             if self._initial_reuse_map:
                 self._adapter.on_global_message(
                     f"Reusing {len(self._initial_reuse_map)} saved job ID(s) from session"
