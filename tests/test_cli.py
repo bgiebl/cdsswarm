@@ -844,6 +844,42 @@ class TestCmdGenerate:
         err = capsys.readouterr().err
         assert "Error" in err
 
+    def test_generate_unwraps_single_element_list(self, tmp_dir, capsys):
+        """A single-element list ``[{...}]`` is auto-unwrapped with a warning."""
+        path = self._write_template(tmp_dir, [self._template()])
+
+        with pytest.raises(SystemExit, match="0"):
+            main(["generate", path])
+
+        captured = capsys.readouterr()
+        assert "Warning" in captured.err
+        assert "single JSON object" in captured.err
+
+        data = json.loads(captured.out)
+        assert len(data["requests"]) == 4
+
+    def test_generate_rejects_multi_element_list(self, tmp_dir, capsys):
+        """A list with multiple elements is rejected with an error."""
+        path = self._write_template(tmp_dir, [self._template(), self._template()])
+
+        with pytest.raises(SystemExit, match="1"):
+            main(["generate", path])
+
+        err = capsys.readouterr().err
+        assert "Error" in err
+        assert "single JSON object" in err
+
+    def test_generate_rejects_non_dict_template(self, tmp_dir, capsys):
+        """A bare string or number in the template file is rejected."""
+        path = self._write_template(tmp_dir, "not a dict")
+
+        with pytest.raises(SystemExit, match="1"):
+            main(["generate", path])
+
+        err = capsys.readouterr().err
+        assert "Error" in err
+        assert "single JSON object" in err
+
     def test_existing_dry_run_still_works(self, tmp_dir, capsys):
         """Existing ``cdsswarm requests.json --dry-run`` still works."""
         requests_file = os.path.join(tmp_dir, "requests.json")

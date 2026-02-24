@@ -187,6 +187,8 @@ cdsswarm generate template.json -o requests.json
 cdsswarm generate template.json --dry-run          # preview without writing
 ```
 
+The template file must contain a **single JSON object** (not a list). If you pass a single-element list `[{...}]`, it will be auto-unwrapped with a warning.
+
 A template looks like a single request with a `split_by` field that lists which dimensions to expand:
 
 ```json

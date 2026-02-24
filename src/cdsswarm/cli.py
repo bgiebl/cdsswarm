@@ -346,6 +346,30 @@ def _cmd_generate(argv: list[str]) -> None:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    if isinstance(template, list):
+        if len(template) == 1 and isinstance(template[0], dict):
+            print(
+                "Warning: template file contains a JSON list. "
+                "The generate command expects a single JSON object. "
+                "Unwrapping the first element.",
+                file=sys.stderr,
+            )
+            template = template[0]
+        else:
+            print(
+                "Error: template must be a single JSON object, not a list. "
+                "See 'cdsswarm generate --help' for the expected format.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    elif not isinstance(template, dict):
+        print(
+            "Error: template must be a single JSON object. "
+            "See 'cdsswarm generate --help' for the expected format.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     split_by = None
     if args.split_by is not None:
         split_by = [s.strip() for s in args.split_by.split(",")]
