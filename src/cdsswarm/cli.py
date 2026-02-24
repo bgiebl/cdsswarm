@@ -8,10 +8,49 @@ import os
 import sys
 import time
 
+import glob as _glob
+
 from .adapters import LoggingAdapter, PlainTextAdapter, TextualAdapter
 from .core import SwarmDownloader, Task
 from .exceptions import RequestFileError
 from .summary import export_summary, print_summary
+
+
+def _log_dir() -> str:
+    """Return $XDG_STATE_HOME/cdsswarm/logs/."""
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "state"
+    )
+    return os.path.join(base, "cdsswarm", "logs")
+
+
+def _auto_log_path() -> str:
+    """Generate a timestamped log filename."""
+    ts = time.strftime("%Y-%m-%d_%H.%M.%S")
+    return os.path.join(_log_dir(), f"run_{ts}.log")
+
+
+def _rotate_logs(directory: str, keep: int = 10):
+    """Keep the last *keep* log files, delete the rest."""
+    pattern = os.path.join(directory, "run_*.log")
+    logs = sorted(_glob.glob(pattern), key=os.path.getmtime)
+    for old in logs[:-keep]:
+        os.remove(old)
+
+
+class _MultiWriter:
+    """Write to multiple file objects simultaneously."""
+
+    def __init__(self, *writers):
+        self._writers = writers
+
+    def write(self, s):
+        for w in self._writers:
+            w.write(s)
+
+    def flush(self):
+        for w in self._writers:
+            w.flush()
 
 
 def load_requests(path: str) -> list[Task]:
@@ -681,7 +720,18 @@ def main(argv: list[str] | None = None):
         session.set_request_id(target, request_id)
         session.save(state_path)
 
-    log_file = open(log_path, "a") if log_path else None
+    # Always-on auto-log
+    auto_dir = _log_dir()
+    os.makedirs(auto_dir, exist_ok=True)
+    auto_log = open(_auto_log_path(), "w")
+
+    # Combine with --log FILE if given
+    user_log = open(log_path, "a") if log_path else None
+    if user_log:
+        log_file = _MultiWriter(auto_log, user_log)
+    else:
+        log_file = auto_log
+
     try:
         wall_start = time.time()
         if mode == "interactive":
@@ -715,8 +765,10 @@ def main(argv: list[str] | None = None):
             )
         wall_end = time.time()
     finally:
-        if log_file:
-            log_file.close()
+        auto_log.close()
+        if user_log:
+            user_log.close()
+        _rotate_logs(auto_dir)
 
     if results is None:
         session.save(state_path)

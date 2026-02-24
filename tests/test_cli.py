@@ -8,7 +8,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cdsswarm.cli import _resolve_mode, _run_script, load_requests, main
+from cdsswarm.cli import (
+    _MultiWriter,
+    _resolve_mode,
+    _rotate_logs,
+    _run_script,
+    load_requests,
+    main,
+)
 from cdsswarm.core import Result, Task
 from cdsswarm.state import SessionState, session_path
 
@@ -1594,3 +1601,166 @@ class TestCmdCancelAllJobs:
 
         err = capsys.readouterr().err
         assert "server error" in err
+
+
+class TestMultiWriter:
+    def test_write_to_multiple(self):
+        a = io.StringIO()
+        b = io.StringIO()
+        w = _MultiWriter(a, b)
+        w.write("hello")
+        assert a.getvalue() == "hello"
+        assert b.getvalue() == "hello"
+
+    def test_flush(self):
+        a = MagicMock()
+        b = MagicMock()
+        w = _MultiWriter(a, b)
+        w.flush()
+        a.flush.assert_called_once()
+        b.flush.assert_called_once()
+
+
+class TestRotateLogs:
+    def test_keeps_last_n(self, tmp_dir):
+        log_dir = os.path.join(tmp_dir, "logs")
+        os.makedirs(log_dir)
+        # Create 12 log files with staggered mtimes
+        for i in range(12):
+            p = os.path.join(log_dir, f"run_2026-01-{i + 1:02d}_00.00.00.log")
+            with open(p, "w") as f:
+                f.write(f"log {i}")
+            os.utime(p, (i, i))
+
+        _rotate_logs(log_dir, keep=10)
+
+        remaining = sorted(os.listdir(log_dir))
+        assert len(remaining) == 10
+        # Oldest two should be gone
+        assert "run_2026-01-01_00.00.00.log" not in remaining
+        assert "run_2026-01-02_00.00.00.log" not in remaining
+
+    def test_fewer_than_keep(self, tmp_dir):
+        log_dir = os.path.join(tmp_dir, "logs")
+        os.makedirs(log_dir)
+        for i in range(3):
+            p = os.path.join(log_dir, f"run_2026-01-{i + 1:02d}_00.00.00.log")
+            with open(p, "w") as f:
+                f.write("")
+        _rotate_logs(log_dir, keep=10)
+        assert len(os.listdir(log_dir)) == 3
+
+    def test_ignores_non_matching_files(self, tmp_dir):
+        log_dir = os.path.join(tmp_dir, "logs")
+        os.makedirs(log_dir)
+        # Non-matching file should be left alone
+        other = os.path.join(log_dir, "other.txt")
+        with open(other, "w") as f:
+            f.write("")
+        for i in range(12):
+            p = os.path.join(log_dir, f"run_2026-01-{i + 1:02d}_00.00.00.log")
+            with open(p, "w") as f:
+                f.write("")
+            os.utime(p, (i, i))
+        _rotate_logs(log_dir, keep=10)
+        # 10 run_*.log + 1 other.txt
+        assert len(os.listdir(log_dir)) == 11
+        assert os.path.isfile(other)
+
+
+class TestAutoLog:
+    def _write_tasks(self, tmp_dir):
+        path = os.path.join(tmp_dir, "requests.json")
+        with open(path, "w") as f:
+            json.dump([{"dataset": "ds", "request": {}, "target": "out.grib"}], f)
+        return path
+
+    def test_auto_log_created(self, tmp_dir):
+        """A run_*.log file is created in $XDG_STATE_HOME/cdsswarm/logs/."""
+        path = self._write_tasks(tmp_dir)
+        task = Task("ds", {}, "out.grib")
+        results = [Result(task=task, success=True, start_time=100.0, end_time=200.0)]
+        state_home = os.path.join(tmp_dir, "state")
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch.dict(os.environ, {"XDG_STATE_HOME": state_home}),
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", return_value=results),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path])
+
+        log_dir = os.path.join(state_home, "cdsswarm", "logs")
+        logs = [f for f in os.listdir(log_dir) if f.startswith("run_")]
+        assert len(logs) == 1
+
+    def test_auto_log_rotation(self, tmp_dir):
+        """Old auto-log files are rotated after a run."""
+        path = self._write_tasks(tmp_dir)
+        task = Task("ds", {}, "out.grib")
+        results = [Result(task=task, success=True, start_time=100.0, end_time=200.0)]
+        state_home = os.path.join(tmp_dir, "state")
+        log_dir = os.path.join(state_home, "cdsswarm", "logs")
+        os.makedirs(log_dir)
+
+        # Pre-create 12 old log files
+        for i in range(12):
+            p = os.path.join(log_dir, f"run_2020-01-{i + 1:02d}_00.00.00.log")
+            with open(p, "w") as f:
+                f.write("")
+            os.utime(p, (i, i))
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch.dict(os.environ, {"XDG_STATE_HOME": state_home}),
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", return_value=results),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path])
+
+        logs = [f for f in os.listdir(log_dir) if f.startswith("run_")]
+        assert len(logs) == 10
+
+    def test_auto_log_with_user_log(self, tmp_dir):
+        """When --log is given, content appears in both auto-log and user file."""
+        path = self._write_tasks(tmp_dir)
+        task = Task("ds", {}, "out.grib")
+        results = [Result(task=task, success=True, start_time=100.0, end_time=200.0)]
+        state_home = os.path.join(tmp_dir, "state")
+        user_log_path = os.path.join(tmp_dir, "user.log")
+
+        def fake_run_script(tasks, workers, skip, reuse, retries, **kw):
+            log_file = kw.get("log_file")
+            if log_file:
+                log_file.write("test log line\n")
+                log_file.flush()
+            return results
+
+        cfg_patches = _patch_config(tmp_dir)
+        with (
+            cfg_patches[0],
+            cfg_patches[1],
+            patch.dict(os.environ, {"XDG_STATE_HOME": state_home}),
+            patch("cdsswarm.cli._resolve_mode", return_value="script"),
+            patch("cdsswarm.cli._run_script", side_effect=fake_run_script),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main([path, "--log", user_log_path])
+
+        # User log should contain the line
+        assert os.path.isfile(user_log_path)
+        with open(user_log_path) as f:
+            assert "test log line" in f.read()
+
+        # Auto-log should also contain the line
+        log_dir = os.path.join(state_home, "cdsswarm", "logs")
+        auto_logs = [f for f in os.listdir(log_dir) if f.startswith("run_")]
+        assert len(auto_logs) == 1
+        with open(os.path.join(log_dir, auto_logs[0])) as f:
+            assert "test log line" in f.read()
