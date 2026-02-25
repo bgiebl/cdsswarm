@@ -393,7 +393,7 @@ class TestFetchSystemStatus:
             "nodes": [{"node": {"Title": "Other Service", "Status": "OK"}}]
         }
         mock_requests.get.return_value = mock_resp
-        assert fetch_system_status() == ""
+        assert fetch_system_status() == ("", "")
 
     @patch("cdsswarm._cds_metadata.http_requests")
     def test_returns_status(self, mock_requests):
@@ -403,7 +403,7 @@ class TestFetchSystemStatus:
             "nodes": [{"node": {"Title": "Data Stores", "Status": "OK"}}]
         }
         mock_requests.get.return_value = mock_resp
-        assert fetch_system_status() == "OK"
+        assert fetch_system_status() == ("OK", "")
 
 
 class TestLiveScraper:
@@ -425,12 +425,12 @@ class TestLiveScraper:
         """When live fetch fails but status succeeds, callback fires."""
 
         mock_live.side_effect = RuntimeError("network error")
-        mock_status.return_value = "OK"
+        mock_status.return_value = ("OK", "")
         adapter = MagicMock()
         cancel = threading.Event()
         scraper = LiveScraper(adapter, cancel)
         scraper._poll_once()
-        adapter.on_server_stats_update.assert_called_once_with(0, 0, 0, "OK")
+        adapter.on_server_stats_update.assert_called_once_with(0, 0, 0, "OK", "")
 
     @patch("cdsswarm._cds_metadata.fetch_system_status")
     @patch("cdsswarm._cds_metadata.fetch_live_stats")
@@ -439,7 +439,7 @@ class TestLiveScraper:
         from cdsswarm._cds_metadata import ServerStats
 
         mock_live.return_value = ServerStats(server_running=1, server_queued=2)
-        mock_status.return_value = ""
+        mock_status.return_value = ("", "")
         adapter = MagicMock()
         cancel = threading.Event()
         scraper = LiveScraper(adapter, cancel, poll_interval=0.05)

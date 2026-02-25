@@ -896,8 +896,9 @@ async def test_server_stats_meter_bar_status_dots():
     meter = MeterBar()
     for status, expected_color in [
         ("OK", "[green]"),
-        ("Degraded", "[yellow]"),
-        ("Down", "[red]"),
+        ("Degraded", "[blink yellow]"),
+        ("Down", "[blink red]"),
+        ("unknown", "Server:"),
     ]:
         result = meter.render_progress(
             completed=1,
@@ -913,3 +914,18 @@ async def test_server_stats_meter_bar_status_dots():
         assert expected_color in result
         assert "5 queued" in result
         assert "2 running" in result
+
+    # Degraded with status message
+    result = meter.render_progress(
+        completed=1,
+        total=10,
+        skipped=0,
+        eta_start=time.monotonic() - 10,
+        status="",
+        server_queued=5,
+        server_running=2,
+        running_users=1,
+        system_status="Degraded",
+        system_status_message="DSS upgrade in progress",
+    )
+    assert "Reason: DSS upgrade in progress" in result

@@ -109,6 +109,7 @@ class OutputAdapter(ABC):
         server_queued: int,
         running_users: int,
         system_status: str,
+        system_status_message: str = "",
     ):
         pass
 
@@ -249,20 +250,39 @@ class PlainTextAdapter(OutputAdapter):
             self._write(f"  {self._worker_tag(worker_id)} {prefix}{msg}")
 
     def on_server_stats_update(
-        self, server_running, server_queued, running_users, system_status
+        self,
+        server_running,
+        server_queued,
+        running_users,
+        system_status,
+        system_status_message="",
     ):
-        key = (server_running, server_queued, running_users, system_status)
+        key = (
+            server_running,
+            server_queued,
+            running_users,
+            system_status,
+            system_status_message,
+        )
         with self._lock:
             if key == getattr(self, "_last_server_stats", None):
                 return
             self._last_server_stats = key
-        parts = [
-            f"{server_queued} queued",
-            f"{server_running} running",
-        ]
-        if system_status:
-            parts.append(f"Status: {system_status}")
-        self._write(f"  [CDS global] {' | '.join(parts)}")
+        stats = f"{server_queued} queued | {server_running} running"
+        status_lower = system_status.lower() if system_status else ""
+        if status_lower in ("degraded", "down"):
+            tag = system_status.upper()
+            msg = f"  Server ({tag}): {stats}"
+            if self._color:
+                msg = f"\033[1;33m  Server ({tag}): {stats}\033[0m"
+            self._write(msg)
+            if system_status_message:
+                detail = f"  Reason: {system_status_message}"
+                if self._color:
+                    detail = f"\033[33m{detail}\033[0m"
+                self._write(detail)
+        else:
+            self._write(f"  Server: {stats}")
 
 
 class TextualAdapter(OutputAdapter):
@@ -374,13 +394,22 @@ class TextualAdapter(OutputAdapter):
             self._post(WorkerMessage(worker_id, f"Post-hook failed: {warning}"))
 
     def on_server_stats_update(
-        self, server_running, server_queued, running_users, system_status
+        self,
+        server_running,
+        server_queued,
+        running_users,
+        system_status,
+        system_status_message="",
     ):
         from .textual_app import ServerStatsUpdate
 
         self._post(
             ServerStatsUpdate(
-                server_running, server_queued, running_users, system_status
+                server_running,
+                server_queued,
+                running_users,
+                system_status,
+                system_status_message,
             )
         )
 
@@ -470,12 +499,23 @@ class LoggingAdapter(OutputAdapter):
         self._inner.on_task_hook_finished(worker_id, success, warning)
 
     def on_server_stats_update(
-        self, server_running, server_queued, running_users, system_status
+        self,
+        server_running,
+        server_queued,
+        running_users,
+        system_status,
+        system_status_message="",
     ):
         self._write(
             f"server stats: queued={server_queued} running={server_running} "
             f"users={running_users} status={system_status}"
         )
+        if system_status_message:
+            self._write(f"server status message: {system_status_message}")
         self._inner.on_server_stats_update(
-            server_running, server_queued, running_users, system_status
+            server_running,
+            server_queued,
+            running_users,
+            system_status,
+            system_status_message,
         )

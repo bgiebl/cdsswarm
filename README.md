@@ -19,9 +19,10 @@ How much faster is parallel downloading? Benchmark with 4 monthly ERA5 files (2m
 
 | Workers | Wall time | Speedup |
 |---------|-----------|---------|
-| 1       | 1m22s     | 1.0x    |
-| 2       | 48s       | 1.7x   |
-| 4       | 38s       | 2.2x   |
+| 1       | 24m02s    | 1.0x    |
+| 2       | 8m58s     | 2.7x   |
+| 4       | 7m39s     | 3.1x   |
+| 8       | 7m54s     | 3.0x   |
 
 Each CDS request spends most of its time waiting in the server queue and being processed — parallel workers overlap that wait. For large files, download parallelism helps too. Results vary with server load and time of day; larger batches benefit more from higher worker counts.
 

@@ -237,12 +237,14 @@ class ServerStatsUpdate(Message):
         server_queued: int,
         running_users: int,
         system_status: str,
+        system_status_message: str = "",
     ) -> None:
         super().__init__()
         self.server_running = server_running
         self.server_queued = server_queued
         self.running_users = running_users
         self.system_status = system_status
+        self.system_status_message = system_status_message
 
 
 class FileActive(Message):
@@ -415,6 +417,7 @@ class MeterBar(Static):
         server_queued: int = 0,
         running_users: int = 0,
         system_status: str = "",
+        system_status_message: str = "",
     ) -> str:
         grand_total = total + skipped
         grand_done = completed + skipped
@@ -445,17 +448,17 @@ class MeterBar(Static):
 
         # Server-wide stats
         if server_queued > 0 or server_running > 0 or system_status:
-            dot = ""
-            if system_status:
-                status_lower = system_status.lower()
-                if status_lower == "ok":
-                    dot = "[green]\u25cf[/] "
-                elif status_lower == "degraded":
-                    dot = "[yellow]\u25cf[/] "
-                elif status_lower == "down":
-                    dot = "[red]\u25cf[/] "
+            status_lower = system_status.lower() if system_status else ""
+            if status_lower == "degraded":
+                label = "[blink yellow]●[/] Server ([bold yellow]DEGRADED[/])"
+            elif status_lower == "down":
+                label = "[blink red]●[/] Server ([bold red]DOWN[/])"
+            elif status_lower == "ok":
+                label = "[green]\u25cf[/] Server"
+            else:
+                label = "Server"
             parts.append(
-                f"{dot}Server: {server_queued} queued \u2502 {server_running} running"
+                f"{label}: {server_queued} queued \u2502 {server_running} running"
             )
 
         if status:
@@ -464,6 +467,9 @@ class MeterBar(Static):
 
         if status_line:
             text += f"\n[dim]{status_line}[/]"
+
+        if system_status_message and system_status.lower() in ("degraded", "down"):
+            text += f"\n[dim yellow]Reason: {system_status_message}[/]"
 
         return text
 
@@ -636,7 +642,7 @@ class CdsswarmApp(App):
     }
     #meter-bar {
         height: auto;
-        max-height: 4;
+        max-height: 5;
         border: round #444444;
         padding: 0 1;
         margin: 0;
@@ -762,6 +768,7 @@ class CdsswarmApp(App):
         self.server_queued = 0
         self.server_running_users = 0
         self.server_system_status = ""
+        self.server_system_status_message = ""
 
         # Tab state
         self._active_tab = "workers"
@@ -1034,6 +1041,7 @@ class CdsswarmApp(App):
         self.server_queued = msg.server_queued
         self.server_running_users = msg.running_users
         self.server_system_status = msg.system_status
+        self.server_system_status_message = msg.system_status_message
         self._update_meter_bar()
 
     def on_file_active(self, msg: FileActive) -> None:
@@ -1204,5 +1212,6 @@ class CdsswarmApp(App):
                 self.server_queued,
                 self.server_running_users,
                 self.server_system_status,
+                self.server_system_status_message,
             )
         )

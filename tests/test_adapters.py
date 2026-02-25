@@ -392,7 +392,16 @@ class TestPlainTextAdapter:
         assert len(messages) == 1
         assert "10 queued" in messages[0]
         assert "5 running" in messages[0]
-        assert "Status: OK" in messages[0]
+
+    def test_server_stats_update_degraded_with_color(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append, use_color=True)
+        adapter.on_server_stats_update(5, 10, 3, "Degraded", "DSS upgrade")
+        assert len(messages) == 2
+        assert "\033[1;33m" in messages[0]
+        assert "DEGRADED" in messages[0]
+        assert "\033[33m" in messages[1]
+        assert "Reason: DSS upgrade" in messages[1]
 
     def test_server_stats_update_deduplicated(self):
         messages = []
@@ -490,7 +499,13 @@ class TestLoggingAdapter:
         assert "running=5" in log
         assert "users=3" in log
         assert "status=OK" in log
-        inner.on_server_stats_update.assert_called_once_with(5, 10, 3, "OK")
+        inner.on_server_stats_update.assert_called_once_with(5, 10, 3, "OK", "")
+
+    def test_on_server_stats_update_with_message(self):
+        adapter, inner, log_file = self._make_adapter()
+        adapter.on_server_stats_update(5, 10, 3, "Degraded", "DSS upgrade")
+        log = log_file.getvalue()
+        assert "server status message: DSS upgrade" in log
 
 
 class TestTextualAdapter:

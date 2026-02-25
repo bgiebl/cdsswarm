@@ -33,6 +33,7 @@ class ServerStats:
     server_queued: int = 0
     running_users: int = 0
     system_status: str = ""
+    system_status_message: str = ""
 
 
 def fetch_job_metadata(
@@ -250,8 +251,8 @@ def fetch_live_stats(url: str = _LIVE_URL) -> ServerStats:
     )
 
 
-def fetch_system_status(url: str = _STATUS_URL) -> str:
-    """GET the ECMWF status API and return the Data Stores status string."""
+def fetch_system_status(url: str = _STATUS_URL) -> tuple[str, str]:
+    """GET the ECMWF status API and return (status, notification) for Data Stores."""
     resp = http_requests.get(url, timeout=15)
     resp.raise_for_status()
     data = resp.json()
@@ -261,8 +262,10 @@ def fetch_system_status(url: str = _STATUS_URL) -> str:
     for entry in nodes:
         node = entry.get("node", entry) if isinstance(entry, dict) else {}
         if node.get("Title") == "Data Stores":
-            return str(node.get("Status", ""))
-    return ""
+            status = str(node.get("Status", ""))
+            message = str(node.get("Last notification", ""))
+            return status, message
+    return "", ""
 
 
 class LiveScraper:
@@ -313,7 +316,7 @@ class LiveScraper:
             log.debug("Failed to fetch /live stats", exc_info=True)
 
         try:
-            stats.system_status = fetch_system_status()
+            stats.system_status, stats.system_status_message = fetch_system_status()
             got_data = True
         except Exception:
             log.debug("Failed to fetch system status", exc_info=True)
@@ -326,6 +329,7 @@ class LiveScraper:
             stats.server_queued,
             stats.running_users,
             stats.system_status,
+            stats.system_status_message,
         )
         if current != self._last:
             self._last = current
@@ -334,4 +338,5 @@ class LiveScraper:
                 stats.server_queued,
                 stats.running_users,
                 stats.system_status,
+                stats.system_status_message,
             )
