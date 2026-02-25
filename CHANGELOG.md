@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.0] - 2026-02-25
+
+### Added
+- Shell completion for bash and zsh via `cdsswarm completion bash|zsh` (uses `shtab`)
+- Benchmark script (`examples/benchmark.py`)
+- Python 3.14 support
+- Mypy type checking with pre-commit hook
+- Ruff linter added to dev dependencies
+- Changelog link in project metadata
+
+### Changed
+- Declared package as typed (`Typing :: Typed` classifier)
+- Added `OS Independent` classifier
+
 ## [0.1.7] - 2026-02-25
 
 ### Added
@@ -39,6 +53,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 - Bump GitHub Actions dependencies (checkout v6, setup-python v6, upload-artifact v6, download-artifact v7)
 
+[0.2.0]: https://github.com/bgiebl/cdsswarm/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/bgiebl/cdsswarm/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/bgiebl/cdsswarm/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/bgiebl/cdsswarm/compare/v0.1.4...v0.1.5
