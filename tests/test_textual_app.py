@@ -311,6 +311,49 @@ async def test_tasks_initialized_populates_files():
 
 
 @pytest.mark.asyncio
+async def test_cached_file_shows_size():
+    """Cached files show their on-disk size in the Size column."""
+    from unittest.mock import patch
+
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        tasks = _make_tasks(3)
+        skipped = {tasks[0].target}
+        with patch(
+            "cdsswarm.textual_app.os.path.getsize", return_value=5 * 1024 * 1024
+        ):
+            app.post_message(TasksInitialized(tasks, skipped))
+            await pilot.pause()
+        # Cached file should have dl_total set and Size column populated
+        assert app.files[0].dl_total == 5 * 1024 * 1024
+        ft = app.query_one("#files-table", DataTable)
+        row = ft.get_row("0")
+        assert "5.0 MB" in str(row[4])  # Size is column index 4
+        # Pending file should have no size
+        assert app.files[1].dl_total == 0
+        pending_row = ft.get_row("1")
+        assert str(pending_row[4]) == "\u2014"
+
+
+@pytest.mark.asyncio
+async def test_cached_file_size_oserror_fallback():
+    """Cached file gracefully shows dash when os.path.getsize raises OSError."""
+    from unittest.mock import patch
+
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        tasks = _make_tasks(2)
+        skipped = {tasks[0].target}
+        with patch("cdsswarm.textual_app.os.path.getsize", side_effect=OSError("gone")):
+            app.post_message(TasksInitialized(tasks, skipped))
+            await pilot.pause()
+        assert app.files[0].dl_total == 0
+        ft = app.query_one("#files-table", DataTable)
+        row = ft.get_row("0")
+        assert str(row[4]) == "\u2014"
+
+
+@pytest.mark.asyncio
 async def test_file_active():
     """FileActive marks a file as active."""
     app = CdsswarmApp(num_workers=2)

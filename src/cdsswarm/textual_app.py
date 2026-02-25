@@ -1030,8 +1030,14 @@ class CdsswarmApp(App):
                 request=task.request,
                 status=status,
             )
+            if status is FileStatus.CACHED:
+                try:
+                    fd.dl_total = os.path.getsize(task.target)
+                except OSError:
+                    pass
             self.files.append(fd)
             self.file_index[task.target] = i
+            size_str = format_size(fd.dl_total) if fd.dl_total > 0 else "\u2014"
             ft.add_row(
                 str(i),
                 styled_status(status)
@@ -1039,7 +1045,7 @@ class CdsswarmApp(App):
                 else Text(status.value, style="dim"),
                 task.label,
                 task.dataset,
-                "\u2014",
+                size_str,
                 "\u2014",
                 "\u2014",
                 key=str(i),
