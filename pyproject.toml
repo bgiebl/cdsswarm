@@ -38,6 +38,7 @@ dev = [
     "pytest-cov",
     "pyyaml",
     "pre-commit",
+    "ruff",
     "mypy",
     "types-requests",
     "types-tqdm",
