@@ -349,7 +349,13 @@ def main():
     parser = argparse.ArgumentParser(description="Demo the cdsswarm Textual TUI")
     parser.add_argument("-w", "--workers", type=int, default=4)
     parser.add_argument("-t", "--tasks", type=int, default=50)
+    parser.add_argument(
+        "-s", "--seed", type=int, default=None, help="random seed for reproducible runs"
+    )
     args = parser.parse_args()
+
+    if args.seed is not None:
+        random.seed(args.seed)
 
     app = DemoApp(num_workers=args.workers, num_tasks=args.tasks)
     app.run()

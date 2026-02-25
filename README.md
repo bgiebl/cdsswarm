@@ -11,8 +11,7 @@ Submit multiple CDS API requests and download them in parallel with a configurab
 
 > **Feedback welcome!** This project is under active development. If you have suggestions, feature requests, or run into any issues, please open an issue on [GitHub](https://github.com/bgiebl/cdsswarm/issues) or send an email to [b.giebl@protonmail.com](mailto:b.giebl@protonmail.com).
 
-![Workers tab](https://raw.githubusercontent.com/bgiebl/cdsswarm/main/img/tui_screenshot_workers.png)
-![Files tab](https://raw.githubusercontent.com/bgiebl/cdsswarm/main/img/tui_screenshot.png)
+![TUI demo](https://raw.githubusercontent.com/bgiebl/cdsswarm/main/img/demo.gif)
 
 
 ## Installation
