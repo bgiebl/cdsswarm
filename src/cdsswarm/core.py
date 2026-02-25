@@ -8,6 +8,7 @@ import os
 import subprocess
 import threading
 import time
+import traceback
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -380,6 +381,14 @@ class SwarmDownloader:
                     if self._cancel_event.is_set():
                         raise
                     delay = min(2 ** (attempt - 1), 60)
+                    tb = traceback.format_exc()
+                    log.warning(
+                        "[worker %d] %s (attempt %d):\n%s",
+                        wid,
+                        exc,
+                        attempt,
+                        tb,
+                    )
                     if degraded:
                         self._adapter.on_task_message(
                             wid,

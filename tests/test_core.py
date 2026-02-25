@@ -513,6 +513,38 @@ class TestSwarmDownloader:
         assert "1/3" in str(retry_messages[0])
 
     @patch("cdsswarm.core.cdsapi")
+    def test_retry_logs_full_traceback(self, mock_cdsapi, tmp_dir, caplog):
+        """Retry failures log the full traceback for debugging."""
+        mock_client = MagicMock()
+        call_count = [0]
+
+        def fake_retrieve(dataset, request, target):
+            call_count[0] += 1
+            if call_count[0] < 2:
+                raise ValueError("bad value(s) in fds_to_keep")
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = MagicMock(spec=PlainTextAdapter)
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, max_retries=3)
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="cdsswarm.core"):
+            results = downloader.run()
+
+        assert results is not None
+        assert results[0].success
+        # The log must contain the full traceback, not just the message
+        assert "Traceback (most recent call last)" in caplog.text
+        assert "bad value(s) in fds_to_keep" in caplog.text
+        assert "fake_retrieve" in caplog.text
+
+    @patch("cdsswarm.core.cdsapi")
     def test_cancel_sets_event_and_shuts_down(self, mock_cdsapi, tmp_dir):
         """cancel() sets the cancel event and shuts down the pool."""
         tasks = _make_tasks(tmp_dir, count=1)
