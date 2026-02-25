@@ -47,12 +47,14 @@ dev = [
     "types-tqdm",
     "types-PyYAML",
 ]
+docs = ["zensical"]
 
 [project.scripts]
 cdsswarm = "cdsswarm.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/bgiebl/cdsswarm"
+Documentation = "https://bgiebl.github.io/cdsswarm/"
 Repository = "https://github.com/bgiebl/cdsswarm"
 Issues = "https://github.com/bgiebl/cdsswarm/issues"
 Changelog = "https://github.com/bgiebl/cdsswarm/blob/main/CHANGELOG.md"

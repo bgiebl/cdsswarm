@@ -1,0 +1,56 @@
+[project]
+site_name = "cdsswarm"
+site_url = "https://bgiebl.github.io/cdsswarm/"
+site_description = "Concurrent CDS API downloader with an interactive Textual TUI and script mode."
+repo_url = "https://github.com/bgiebl/cdsswarm"
+repo_name = "bgiebl/cdsswarm"
+
+nav = [
+  { "Home" = "index.md" },
+  { "Getting Started" = "getting-started.md" },
+  { "CLI Reference" = "cli.md" },
+  { "Configuration" = "configuration.md" },
+  { "Python API" = "python-api.md" },
+  { "TUI" = "tui.md" },
+  { "Changelog" = "changelog.md" },
+]
+
+[project.theme]
+features = [
+  "content.code.copy",
+  "navigation.sections",
+  "navigation.expand",
+  "navigation.top",
+]
+
+[[project.theme.palette]]
+scheme = "default"
+primary = "teal"
+accent = "teal"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+primary = "teal"
+accent = "teal"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
+
+[project.markdown_extensions.admonition]
+
+[project.markdown_extensions.pymdownx.details]
+
+[project.markdown_extensions.pymdownx.superfences]
+
+[project.markdown_extensions.pymdownx.highlight]
+anchor_linenums = true
+
+[project.markdown_extensions.pymdownx.inlinehilite]
+
+[project.markdown_extensions.tables]
+
+[project.markdown_extensions.attr_list]
+
+[project.markdown_extensions.toc]
+permalink = true
