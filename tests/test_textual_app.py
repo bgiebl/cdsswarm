@@ -28,6 +28,7 @@ from cdsswarm.textual_app import (
     WorkerInfoPanel,
     WorkerMessage,
     WorkerProgress,
+    WorkerStateUpdate,
     WorkerRequestId,
     WorkerRequestLabels,
     WorkerServerTimestamps,
@@ -723,7 +724,7 @@ async def test_tick_elapsed_updates_table():
         await pilot.pause()
         wt = app.query_one("#worker-table", DataTable)
         row = wt.get_row("0")
-        elapsed_cell = str(row[4])  # Elapsed is index 4
+        elapsed_cell = str(row[5])  # Elapsed is index 5 (after W-State)
         assert "m" in elapsed_cell or "s" in elapsed_cell
 
 
@@ -740,7 +741,7 @@ async def test_worker_finished_dl_pct():
         await pilot.pause()
         wt = app.query_one("#worker-table", DataTable)
         row = wt.get_row("0")
-        dl_pct_cell = str(row[6])  # DL % is index 6
+        dl_pct_cell = str(row[7])  # DL % is index 7 (after W-State)
         assert "\u2713" in dl_pct_cell
 
 
@@ -928,4 +929,32 @@ async def test_server_stats_meter_bar_status_dots():
         system_status="Degraded",
         system_status_message="DSS upgrade in progress",
     )
-    assert "Reason: DSS upgrade in progress" in result
+    assert "Reason:" in result and "DSS upgrade in progress" in result
+    assert "workers paused" in result
+
+
+@pytest.mark.asyncio
+async def test_worker_state_column():
+    """WorkerStateUpdate sets correct badges in the W-State column."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        wt = app.query_one("#worker-table", DataTable)
+
+        # Worker enters pause
+        app.post_message(WorkerStateUpdate(0, "paused"))
+        await pilot.pause()
+        row0 = wt.get_row("0")
+        assert any("paused" in str(cell) for cell in row0)
+
+        # Worker resumes
+        app.post_message(WorkerStateUpdate(0, "active"))
+        await pilot.pause()
+        row0 = wt.get_row("0")
+        assert any("active" in str(cell) for cell in row0)
+        assert not any("paused" in str(cell) for cell in row0)
+
+        # Worker retrying
+        app.post_message(WorkerStateUpdate(0, "retrying"))
+        await pilot.pause()
+        row0 = wt.get_row("0")
+        assert any("retrying" in str(cell) for cell in row0)

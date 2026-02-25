@@ -154,6 +154,13 @@ class WorkerCdsStatus(Message):
         self.cds_status = cds_status
 
 
+class WorkerStateUpdate(Message):
+    def __init__(self, worker_id: int, state: str) -> None:
+        super().__init__()
+        self.worker_id = worker_id
+        self.state = state
+
+
 class WorkerRequestId(Message):
     def __init__(self, worker_id: int, request_id: str) -> None:
         super().__init__()
@@ -450,11 +457,11 @@ class MeterBar(Static):
         if server_queued > 0 or server_running > 0 or system_status:
             status_lower = system_status.lower() if system_status else ""
             if status_lower == "degraded":
-                label = "[blink yellow]●[/] Server ([bold yellow]DEGRADED[/])"
+                label = "[blink yellow]●[/] Server ([bold yellow]DEGRADED[/]) [yellow](workers paused)[/]"
             elif status_lower == "down":
-                label = "[blink red]●[/] Server ([bold red]DOWN[/])"
+                label = "[blink red]●[/] Server ([bold red]DOWN[/]) [red](workers paused)[/]"
             elif status_lower == "ok":
-                label = "[green]\u25cf[/] Server"
+                label = "[green]\u25cf[/] Server ([green]OK[/])"
             else:
                 label = "Server"
             parts.append(
@@ -469,7 +476,7 @@ class MeterBar(Static):
             text += f"\n[dim]{status_line}[/]"
 
         if system_status_message and system_status.lower() in ("degraded", "down"):
-            text += f"\n[dim yellow]Reason: {system_status_message}[/]"
+            text += f"\n[dim yellow]Reason:[/] [dim]{system_status_message}[/]"
 
         return text
 
@@ -586,7 +593,8 @@ class ParamsScreen(Screen):
 
 WORKER_COLUMNS = [
     ("W", 4),
-    ("Status", 12),
+    ("W-State", 8),
+    ("CDS Status", 12),
     ("Filename", 20),
     ("Started", 10),
     ("Elapsed", 10),
@@ -816,6 +824,7 @@ class CdsswarmApp(App):
         for i in range(self.num_workers):
             wt.add_row(
                 str(i),
+                "",
                 styled_status(WorkerStatus.IDLE),
                 "\u2014",
                 "\u2014",
@@ -883,8 +892,9 @@ class CdsswarmApp(App):
         w.logs.append(f"Started: {msg.filename}")
 
         wt = self.query_one("#worker-table", DataTable)
+        wt.update_cell(str(msg.worker_id), "W-State", Text("active", style="green"))
         wt.update_cell(
-            str(msg.worker_id), "Status", styled_status(WorkerStatus.ACCEPTED)
+            str(msg.worker_id), "CDS Status", styled_status(WorkerStatus.ACCEPTED)
         )
         wt.update_cell(str(msg.worker_id), "Filename", msg.filename)
         wt.update_cell(
@@ -910,7 +920,7 @@ class CdsswarmApp(App):
         wt = self.query_one("#worker-table", DataTable)
         wt.update_cell(
             str(msg.worker_id),
-            "Status",
+            "CDS Status",
             styled_status(msg.cds_status),
         )
         self._update_worker_info()
@@ -1044,6 +1054,16 @@ class CdsswarmApp(App):
         self.server_system_status_message = msg.system_status_message
         self._update_meter_bar()
 
+    def on_worker_state_update(self, msg: WorkerStateUpdate) -> None:
+        styles = {
+            "active": ("active", "green"),
+            "paused": ("paused", "bold yellow"),
+            "retrying": ("retrying", "bold orange1"),
+        }
+        label, style = styles.get(msg.state, (msg.state, ""))
+        wt = self.query_one("#worker-table", DataTable)
+        wt.update_cell(str(msg.worker_id), "W-State", Text(label, style=style))
+
     def on_file_active(self, msg: FileActive) -> None:
         if msg.target in self.file_index:
             idx = self.file_index[msg.target]
@@ -1075,7 +1095,7 @@ class CdsswarmApp(App):
         wt = self.query_one("#worker-table", DataTable)
         wt.update_cell(
             str(msg.worker_id),
-            "Status",
+            "CDS Status",
             styled_status(WorkerStatus.CANCELLED),
         )
 

@@ -106,6 +106,9 @@ class SwarmDownloader:
         self._initial_reuse_map = initial_reuse_map or {}
         self._pre_messages = pre_messages or []
         self._cancel_event = threading.Event()
+        self._server_ok = threading.Event()
+        self._server_ok.set()  # assume server is OK until told otherwise
+        self._server_degraded = threading.Event()  # set = degraded
         self._state: _WorkerState | None = None
         self._pool: ThreadPoolExecutor | None = None
         self._task_timing: dict[str, tuple[float, float, int]] = {}
@@ -202,7 +205,11 @@ class SwarmDownloader:
         )
         poller.start()
         live_scraper = LiveScraper(
-            self._adapter, self._cancel_event, poll_interval=60.0
+            self._adapter,
+            self._cancel_event,
+            poll_interval=60.0,
+            server_ok_event=self._server_ok,
+            server_degraded_event=self._server_degraded,
         )
         live_scraper.start()
         self._pool = pool = ThreadPoolExecutor(max_workers=self._num_workers)
@@ -341,6 +348,13 @@ class SwarmDownloader:
         try:
             attempt = 0
             while True:
+                # Wait if server is degraded/down
+                if not self._server_ok.is_set():
+                    self._adapter.on_worker_state(wid, "paused")
+                    while not self._server_ok.wait(timeout=1.0):
+                        if self._cancel_event.is_set():
+                            return
+                    self._adapter.on_worker_state(wid, "active")
                 attempt += 1
                 try:
                     if reuse_id is not None:
@@ -358,19 +372,33 @@ class SwarmDownloader:
                 except Exception as exc:
                     with state.lock:
                         state.active_requests.pop(task.target, None)
-                    if attempt >= self._max_retries or self._cancel_event.is_set():
+                    degraded = self._server_degraded.is_set()
+                    if not degraded and (
+                        attempt >= self._max_retries or self._cancel_event.is_set()
+                    ):
+                        raise
+                    if self._cancel_event.is_set():
                         raise
                     delay = min(2 ** (attempt - 1), 60)
-                    self._adapter.on_task_message(
-                        wid,
-                        f"Attempt {attempt}/{self._max_retries} failed: {exc}, "
-                        f"retrying in {delay}s...",
-                    )
+                    if degraded:
+                        self._adapter.on_task_message(
+                            wid,
+                            f"Attempt {attempt} failed (server degraded): "
+                            f"{exc}, retrying in {delay}s...",
+                        )
+                    else:
+                        self._adapter.on_task_message(
+                            wid,
+                            f"Attempt {attempt}/{self._max_retries} failed: "
+                            f"{exc}, retrying in {delay}s...",
+                        )
                     reuse_id = None  # don't reuse a broken job
+                    self._adapter.on_worker_state(wid, "retrying")
                     for _ in range(int(delay * 2)):
                         if self._cancel_event.is_set():
                             raise
                         self._cancel_event.wait(0.5)
+                    self._adapter.on_worker_state(wid, "active")
                     continue
 
                 with state.lock:

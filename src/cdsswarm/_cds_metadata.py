@@ -280,12 +280,21 @@ class LiveScraper:
         poll_interval: Seconds between poll cycles (default 60).
     """
 
-    def __init__(self, adapter, cancel_event, poll_interval=60.0):
+    def __init__(
+        self,
+        adapter,
+        cancel_event,
+        poll_interval=60.0,
+        server_ok_event=None,
+        server_degraded_event=None,
+    ):
         self._adapter = adapter
         self._cancel_event = cancel_event
         self._poll_interval = poll_interval
+        self._server_ok = server_ok_event
+        self._server_degraded = server_degraded_event
         self._thread: threading.Thread | None = None
-        self._last: tuple[int, int, int, str] | None = None
+        self._last: tuple[int, int, int, str, str] | None = None
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -300,8 +309,16 @@ class LiveScraper:
     def _run(self):
         # Fetch once immediately
         self._poll_once()
-        while not self._cancel_event.wait(self._poll_interval):
+        while not self._cancel_event.wait(self._next_interval()):
             self._poll_once()
+
+    def _next_interval(self):
+        """Use faster polling when server is down or degraded."""
+        down = self._server_ok is not None and not self._server_ok.is_set()
+        degraded = self._server_degraded is not None and self._server_degraded.is_set()
+        if down or degraded:
+            return min(self._poll_interval, 30.0)
+        return self._poll_interval
 
     def _poll_once(self):
         stats = ServerStats()
@@ -331,6 +348,19 @@ class LiveScraper:
             stats.system_status,
             stats.system_status_message,
         )
+        # Control worker pause/degraded based on system status
+        status_lower = stats.system_status.lower() if stats.system_status else ""
+        if self._server_ok is not None:
+            if status_lower == "down":
+                self._server_ok.clear()
+            else:
+                self._server_ok.set()
+        if self._server_degraded is not None:
+            if status_lower == "degraded":
+                self._server_degraded.set()
+            else:
+                self._server_degraded.clear()
+
         if current != self._last:
             self._last = current
             self._adapter.on_server_stats_update(

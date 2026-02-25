@@ -397,11 +397,56 @@ class TestPlainTextAdapter:
         messages = []
         adapter = PlainTextAdapter(write_fn=messages.append, use_color=True)
         adapter.on_server_stats_update(5, 10, 3, "Degraded", "DSS upgrade")
-        assert len(messages) == 2
+        assert len(messages) == 3
         assert "\033[1;33m" in messages[0]
         assert "DEGRADED" in messages[0]
-        assert "\033[33m" in messages[1]
-        assert "Reason: DSS upgrade" in messages[1]
+        assert "\033[33mReason:\033[0m" in messages[1]
+        assert "DSS upgrade" in messages[1]
+        assert "Workers paused" in messages[2]
+        assert "\033[1;33m" in messages[2]
+
+    def test_server_stats_update_degraded_reason_no_color(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append, use_color=False)
+        adapter.on_server_stats_update(5, 10, 3, "Degraded", "DSS upgrade")
+        assert any("Reason: DSS upgrade" in m for m in messages)
+
+    def test_server_stats_update_pause_message(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append)
+        adapter.on_server_stats_update(5, 10, 3, "Degraded")
+        assert any("Workers paused" in m for m in messages)
+
+    def test_server_stats_update_resume_message(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append)
+        # First go degraded
+        adapter.on_server_stats_update(5, 10, 3, "Degraded")
+        messages.clear()
+        # Then recover
+        adapter.on_server_stats_update(5, 10, 3, "OK")
+        assert any("Server recovered" in m for m in messages)
+
+    def test_server_stats_update_resume_message_with_color(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append, use_color=True)
+        adapter.on_server_stats_update(5, 10, 3, "Degraded")
+        messages.clear()
+        adapter.on_server_stats_update(5, 10, 3, "OK")
+        resume = [m for m in messages if "recovered" in m]
+        assert len(resume) == 1
+        assert "\033[1;32m" in resume[0]
+
+    def test_server_stats_update_no_pause_on_repeated_degraded(self):
+        messages = []
+        adapter = PlainTextAdapter(write_fn=messages.append)
+        adapter.on_server_stats_update(5, 10, 3, "Degraded")
+        first_pause_count = sum(1 for m in messages if "Workers paused" in m)
+        adapter.on_server_stats_update(6, 10, 3, "Degraded")
+        second_pause_count = sum(1 for m in messages if "Workers paused" in m)
+        # Only one pause message, not two
+        assert first_pause_count == 1
+        assert second_pause_count == 1
 
     def test_server_stats_update_deduplicated(self):
         messages = []
@@ -506,6 +551,12 @@ class TestLoggingAdapter:
         adapter.on_server_stats_update(5, 10, 3, "Degraded", "DSS upgrade")
         log = log_file.getvalue()
         assert "server status message: DSS upgrade" in log
+
+    def test_on_worker_state(self):
+        adapter, inner, log_file = self._make_adapter()
+        adapter.on_worker_state(0, "paused")
+        assert "state: paused" in log_file.getvalue()
+        inner.on_worker_state.assert_called_once_with(0, "paused")
 
 
 class TestTextualAdapter:
@@ -759,6 +810,17 @@ class TestTextualAdapter:
         assert msgs[0].server_queued == 10
         assert msgs[0].running_users == 3
         assert msgs[0].system_status == "OK"
+
+    def test_on_worker_state(self):
+        from cdsswarm.textual_app import WorkerStateUpdate
+
+        adapter, app = self._make_adapter()
+        adapter.on_worker_state(0, "paused")
+        msgs = self._posted_messages(app)
+        assert len(msgs) == 1
+        assert isinstance(msgs[0], WorkerStateUpdate)
+        assert msgs[0].worker_id == 0
+        assert msgs[0].state == "paused"
 
     def test_post_ignores_runtime_error_when_app_stopped(self):
         """_post silently ignores RuntimeError when the app is no longer running."""

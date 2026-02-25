@@ -103,6 +103,10 @@ class OutputAdapter(ABC):
     def on_task_hook_finished(self, worker_id: int, success: bool, warning: str = ""):
         pass
 
+    def on_worker_state(self, worker_id: int, state: str):
+        """Update worker state: 'active', 'paused', or 'retrying'."""
+        pass
+
     def on_server_stats_update(
         self,
         server_running: int,
@@ -270,19 +274,35 @@ class PlainTextAdapter(OutputAdapter):
             self._last_server_stats = key
         stats = f"{server_queued} queued | {server_running} running"
         status_lower = system_status.lower() if system_status else ""
-        if status_lower in ("degraded", "down"):
+        with self._lock:
+            prev_status = getattr(self, "_last_system_status", "")
+            self._last_system_status = status_lower
+        is_bad = status_lower in ("degraded", "down")
+        was_bad = prev_status in ("degraded", "down")
+        if is_bad:
             tag = system_status.upper()
             msg = f"  Server ({tag}): {stats}"
             if self._color:
                 msg = f"\033[1;33m  Server ({tag}): {stats}\033[0m"
             self._write(msg)
             if system_status_message:
-                detail = f"  Reason: {system_status_message}"
                 if self._color:
-                    detail = f"\033[33m{detail}\033[0m"
+                    detail = f"  \033[33mReason:\033[0m {system_status_message}"
+                else:
+                    detail = f"  Reason: {system_status_message}"
                 self._write(detail)
+            if not was_bad:
+                pause_msg = "  Workers paused, waiting for server recovery..."
+                if self._color:
+                    pause_msg = f"\033[1;33m{pause_msg}\033[0m"
+                self._write(pause_msg)
         else:
             self._write(f"  Server: {stats}")
+            if was_bad:
+                resume_msg = "  Server recovered, resuming workers"
+                if self._color:
+                    resume_msg = f"\033[1;32m{resume_msg}\033[0m"
+                self._write(resume_msg)
 
 
 class TextualAdapter(OutputAdapter):
@@ -393,6 +413,11 @@ class TextualAdapter(OutputAdapter):
         if not success:
             self._post(WorkerMessage(worker_id, f"Post-hook failed: {warning}"))
 
+    def on_worker_state(self, worker_id, state):
+        from .textual_app import WorkerStateUpdate
+
+        self._post(WorkerStateUpdate(worker_id, state))
+
     def on_server_stats_update(
         self,
         server_running,
@@ -497,6 +522,10 @@ class LoggingAdapter(OutputAdapter):
         status = "ok" if success else f"FAILED: {warning}"
         self._write(f"[worker {worker_id}] post-hook finished: {status}")
         self._inner.on_task_hook_finished(worker_id, success, warning)
+
+    def on_worker_state(self, worker_id, state):
+        self._write(f"[worker {worker_id}] state: {state}")
+        self._inner.on_worker_state(worker_id, state)
 
     def on_server_stats_update(
         self,

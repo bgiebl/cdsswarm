@@ -448,3 +448,103 @@ class TestLiveScraper:
         cancel.set()
         scraper.stop()
         assert adapter.on_server_stats_update.call_count >= 1
+
+    @patch("cdsswarm._cds_metadata.fetch_system_status")
+    @patch("cdsswarm._cds_metadata.fetch_live_stats")
+    def test_server_ok_stays_set_on_degraded(self, mock_live, mock_status):
+        """server_ok_event stays set when status is Degraded (no full pause)."""
+        mock_live.side_effect = RuntimeError("skip")
+        mock_status.return_value = ("Degraded", "maintenance")
+        adapter = MagicMock()
+        cancel = threading.Event()
+        server_ok = threading.Event()
+        server_ok.set()
+        degraded = threading.Event()
+        scraper = LiveScraper(
+            adapter,
+            cancel,
+            server_ok_event=server_ok,
+            server_degraded_event=degraded,
+        )
+        scraper._poll_once()
+        assert server_ok.is_set()  # not paused
+        assert degraded.is_set()  # but degraded flag is on
+
+    @patch("cdsswarm._cds_metadata.fetch_system_status")
+    @patch("cdsswarm._cds_metadata.fetch_live_stats")
+    def test_server_ok_cleared_on_down(self, mock_live, mock_status):
+        """server_ok_event is cleared when status is Down."""
+        mock_live.side_effect = RuntimeError("skip")
+        mock_status.return_value = ("Down", "outage")
+        adapter = MagicMock()
+        cancel = threading.Event()
+        server_ok = threading.Event()
+        server_ok.set()
+        degraded = threading.Event()
+        scraper = LiveScraper(
+            adapter,
+            cancel,
+            server_ok_event=server_ok,
+            server_degraded_event=degraded,
+        )
+        scraper._poll_once()
+        assert not server_ok.is_set()  # paused
+        assert not degraded.is_set()  # not degraded, it's down
+
+    @patch("cdsswarm._cds_metadata.fetch_system_status")
+    @patch("cdsswarm._cds_metadata.fetch_live_stats")
+    def test_server_ok_event_set_on_recovery(self, mock_live, mock_status):
+        """server_ok_event is set when status returns to OK."""
+        mock_live.side_effect = RuntimeError("skip")
+        mock_status.return_value = ("OK", "")
+        adapter = MagicMock()
+        cancel = threading.Event()
+        server_ok = threading.Event()
+        server_ok.clear()  # start paused
+        degraded = threading.Event()
+        degraded.set()  # start degraded
+        scraper = LiveScraper(
+            adapter,
+            cancel,
+            server_ok_event=server_ok,
+            server_degraded_event=degraded,
+        )
+        scraper._poll_once()
+        assert server_ok.is_set()
+        assert not degraded.is_set()
+
+    @patch("cdsswarm._cds_metadata.fetch_system_status")
+    @patch("cdsswarm._cds_metadata.fetch_live_stats")
+    def test_faster_polling_when_down(self, mock_live, mock_status):
+        """_next_interval returns shorter interval when server is down."""
+        mock_live.side_effect = RuntimeError("skip")
+        mock_status.return_value = ("Down", "outage")
+        adapter = MagicMock()
+        cancel = threading.Event()
+        server_ok = threading.Event()
+        server_ok.set()
+        scraper = LiveScraper(
+            adapter, cancel, poll_interval=60.0, server_ok_event=server_ok
+        )
+        assert scraper._next_interval() == 60.0
+        scraper._poll_once()
+        assert scraper._next_interval() == 30.0
+
+    @patch("cdsswarm._cds_metadata.fetch_system_status")
+    @patch("cdsswarm._cds_metadata.fetch_live_stats")
+    def test_faster_polling_when_degraded(self, mock_live, mock_status):
+        """_next_interval returns shorter interval when server is degraded."""
+        mock_live.side_effect = RuntimeError("skip")
+        mock_status.return_value = ("Degraded", "maintenance")
+        adapter = MagicMock()
+        cancel = threading.Event()
+        degraded = threading.Event()
+        scraper = LiveScraper(
+            adapter,
+            cancel,
+            poll_interval=60.0,
+            server_degraded_event=degraded,
+        )
+        assert scraper._next_interval() == 60.0
+        scraper._poll_once()
+        assert scraper._next_interval() == 30.0

@@ -1071,3 +1071,152 @@ class TestSwarmDownloader:
         # Either returns None (cancel during as_completed) or a failed result
         # The important thing is it stopped retrying
         assert call_count[0] <= 2  # Should not have made 3 attempts
+
+    @patch("cdsswarm.core.LiveScraper.start", new=lambda self: None)
+    @patch("cdsswarm.core.cdsapi")
+    def test_server_down_blocks_worker(self, mock_cdsapi, tmp_dir):
+        """Workers wait when _server_ok is cleared (server down) and resume when set."""
+        import threading
+        import time
+
+        mock_client = MagicMock()
+        call_count = [0]
+
+        def fake_retrieve(dataset, request, target):
+            call_count[0] += 1
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1)
+        downloader._server_ok.clear()  # simulate server down
+
+        def resume_later():
+            time.sleep(0.3)
+            assert call_count[0] == 0  # worker should be blocked
+            downloader._server_ok.set()
+
+        t = threading.Thread(target=resume_later)
+        t.start()
+        results = downloader.run()
+        t.join()
+        assert results is not None
+        assert len(results) == 1
+        assert results[0].success
+
+    @patch("cdsswarm.core.LiveScraper.start", new=lambda self: None)
+    @patch("cdsswarm.core.cdsapi")
+    def test_server_down_cancel_exits(self, mock_cdsapi, tmp_dir):
+        """Cancel event during server down pause exits the worker."""
+        import threading
+        import time
+
+        mock_client = MagicMock()
+        mock_client.retrieve.side_effect = RuntimeError("should not be called")
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1)
+        downloader._server_ok.clear()  # simulate server down
+
+        def cancel_later():
+            time.sleep(0.2)
+            downloader._cancel_event.set()
+
+        t = threading.Thread(target=cancel_later)
+        t.start()
+        downloader.run()
+        t.join()
+        # Worker exited due to cancel, retrieve was never called
+        mock_client.retrieve.assert_not_called()
+
+    @patch("cdsswarm.core.LiveScraper.start", new=lambda self: None)
+    @patch("cdsswarm.core.cdsapi")
+    def test_degraded_retries_indefinitely(self, mock_cdsapi, tmp_dir):
+        """During degraded state, retries exceed max_retries until success."""
+        mock_client = MagicMock()
+        call_count = [0]
+
+        def fail_then_succeed(dataset, request, target):
+            call_count[0] += 1
+            if call_count[0] <= 5:  # fail 5 times (more than max_retries=3)
+                raise RuntimeError("server error")
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fail_then_succeed
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, max_retries=3)
+        downloader._server_degraded.set()  # degraded = unlimited retries
+
+        results = downloader.run()
+        assert results is not None
+        assert len(results) == 1
+        assert results[0].success
+        assert call_count[0] == 6  # 5 failures + 1 success
+
+    @patch("cdsswarm.core.LiveScraper.start", new=lambda self: None)
+    @patch("cdsswarm.core.cdsapi")
+    def test_degraded_cancel_during_retry(self, mock_cdsapi, tmp_dir):
+        """Cancel event set when degraded retry exception is caught exits immediately."""
+        mock_client = MagicMock()
+
+        def fail_and_cancel(dataset, request, target):
+            # Set cancel before raising so line 382 is reached
+            downloader._cancel_event.set()
+            raise RuntimeError("server error")
+
+        mock_client.retrieve.side_effect = fail_and_cancel
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, max_retries=3)
+        downloader._server_degraded.set()
+
+        results = downloader.run()
+        # Should have stopped after first attempt
+        assert results is None or any(not r.success for r in results)
+
+    @patch("cdsswarm.core.LiveScraper.start", new=lambda self: None)
+    @patch("cdsswarm.core.cdsapi")
+    def test_degraded_retry_message_format(self, mock_cdsapi, tmp_dir):
+        """Degraded retry message shows 'server degraded' without max count."""
+        mock_client = MagicMock()
+        call_count = [0]
+
+        def fail_once(dataset, request, target):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("fds error")
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fail_once
+        mock_cdsapi.Client.return_value = mock_client
+
+        task_messages = []
+        tasks = _make_tasks(tmp_dir, count=1)
+        adapter = PlainTextAdapter()
+        original = adapter.on_task_message
+
+        def capture(wid, msg):
+            task_messages.append(msg)
+            original(wid, msg)
+
+        adapter.on_task_message = capture
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, max_retries=3)
+        downloader._server_degraded.set()
+
+        downloader.run()
+        retry_msgs = [m for m in task_messages if "server degraded" in m]
+        assert len(retry_msgs) == 1
+        assert "1/" not in retry_msgs[0]  # no "1/3" counter
