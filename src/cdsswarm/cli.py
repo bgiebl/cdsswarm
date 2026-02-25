@@ -232,8 +232,9 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Concurrent CDS API downloader with TUI",
         epilog=(
             "subcommands:\n"
-            "  generate   Expand a template into a request file\n"
-            "  cancel     Cancel active CDS API requests\n"
+            "  generate     Expand a template into a request file\n"
+            "  cancel       Cancel active CDS API requests\n"
+            "  completion   Print shell completion script (bash/zsh)\n"
             "\n"
             "Run 'cdsswarm <subcommand> --help' for subcommand usage."
         ),
@@ -555,6 +556,86 @@ def _cmd_cancel(argv: list[str]) -> None:
     sys.exit(0)
 
 
+def _build_completion_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for ``cdsswarm completion``."""
+    parser = argparse.ArgumentParser(
+        prog="cdsswarm completion",
+        description="Print shell completion script",
+    )
+    parser.add_argument(
+        "shell",
+        choices=["bash", "zsh"],
+        help="Shell type to generate completions for",
+    )
+    return parser
+
+
+def _build_unified_parser() -> argparse.ArgumentParser:
+    """Build a unified parser with subparsers for completion generation.
+
+    This gives ``shtab`` full visibility into all flags and subcommands.
+    Only called when generating completion scripts, not at runtime.
+    """
+    from . import __version__
+
+    parent = argparse.ArgumentParser(
+        prog="cdsswarm",
+        description="Concurrent CDS API downloader with TUI",
+    )
+    parent.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
+
+    subs = parent.add_subparsers(dest="subcommand")
+
+    # Main download command (as default / no subcommand)
+    dl = subs.add_parser("download", help="Download from CDS API (default)")
+    dl.add_argument("requests_file", help="JSON or YAML file with download requests")
+    dl.add_argument("-w", "--workers", type=int, default=None)
+    dl.add_argument("-m", "--mode", choices=["interactive", "script", "auto"])
+    dl.add_argument("--no-skip", action="store_true")
+    dl.add_argument("--resume", action=argparse.BooleanOptionalAction)
+    dl.add_argument("--reuse", action=argparse.BooleanOptionalAction)
+    dl.add_argument("--max-retries", type=int)
+    dl.add_argument("--output-dir")
+    dl.add_argument("--dry-run", action="store_true")
+    dl.add_argument("--ignore-warnings", action="store_true")
+    dl.add_argument("--log", metavar="FILE")
+    dl.add_argument("--summary", metavar="FILE")
+    dl.add_argument("--post-hook", metavar="CMD")
+
+    # generate
+    gen = subs.add_parser("generate", help="Expand a template into a request file")
+    gen.add_argument("template_file", help="Path to template JSON/YAML file")
+    gen.add_argument("--split-by")
+    gen.add_argument("-o", "--output", metavar="FILE")
+    gen.add_argument("--dry-run", action="store_true")
+
+    # cancel
+    can = subs.add_parser("cancel", help="Cancel active CDS API requests")
+    can.add_argument("request_ids", nargs="*")
+    can.add_argument("-y", "--yes", action="store_true")
+
+    # completion
+    comp = subs.add_parser("completion", help="Print shell completion script")
+    comp.add_argument("shell", choices=["bash", "zsh"])
+
+    return parent
+
+
+def _cmd_completion(argv: list[str]) -> None:
+    """Handle ``cdsswarm completion ...``."""
+    parser = _build_completion_parser()
+    args = parser.parse_args(argv)
+
+    import shtab
+
+    print(shtab.complete(_build_unified_parser(), args.shell))
+    sys.exit(0)
+
+
 def main(argv: list[str] | None = None):
     if argv is None:
         argv = sys.argv[1:]
@@ -564,6 +645,8 @@ def main(argv: list[str] | None = None):
         return _cmd_generate(argv[1:])
     if argv and argv[0] == "cancel":
         return _cmd_cancel(argv[1:])
+    if argv and argv[0] == "completion":
+        return _cmd_completion(argv[1:])
 
     parser = _build_parser()
     args = parser.parse_args(argv)

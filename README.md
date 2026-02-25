@@ -13,6 +13,17 @@ Submit multiple CDS API requests and download them in parallel with a configurab
 
 ![TUI demo](https://raw.githubusercontent.com/bgiebl/cdsswarm/main/img/demo.gif)
 
+## Performance
+
+How much faster is parallel downloading? Benchmark with 4 monthly ERA5 files (2m temperature, Germany bounding box):
+
+| Workers | Wall time | Speedup |
+|---------|-----------|---------|
+| 1       | 1m22s     | 1.0x    |
+| 2       | 48s       | 1.7x   |
+| 4       | 38s       | 2.2x   |
+
+Each CDS request spends most of its time waiting in the server queue and being processed — parallel workers overlap that wait. For large files, download parallelism helps too. Results vary with server load and time of day; larger batches benefit more from higher worker counts.
 
 ## Installation
 
@@ -231,6 +242,18 @@ When no IDs are given, cdsswarm queries the CDS server for all active (accepted/
 |---|---|
 | `request_ids` | Specific request IDs to cancel (omit to cancel all active) |
 | `-y`, `--yes` | Skip confirmation prompt |
+
+### Shell completion
+
+Tab-completion for subcommands and flags is available for bash and zsh:
+
+```bash
+# Bash (add to ~/.bashrc)
+eval "$(cdsswarm completion bash)"
+
+# Zsh (add to ~/.zshrc)
+eval "$(cdsswarm completion zsh)"
+```
 
 ### Session resume
 
