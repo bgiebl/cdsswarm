@@ -55,7 +55,7 @@ cdsswarm = "cdsswarm.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/bgiebl/cdsswarm"
-Documentation = "https://bgiebl.github.io/cdsswarm/"
+Documentation = "https://cdsswarm.meteo-insight.eu/"
 Repository = "https://github.com/bgiebl/cdsswarm"
 Issues = "https://github.com/bgiebl/cdsswarm/issues"
 Changelog = "https://github.com/bgiebl/cdsswarm/blob/main/CHANGELOG.md"

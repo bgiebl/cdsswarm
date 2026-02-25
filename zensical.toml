@@ -1,6 +1,6 @@
 [project]
 site_name = "cdsswarm"
-site_url = "https://bgiebl.github.io/cdsswarm/"
+site_url = "https://cdsswarm.meteo-insight.eu/"
 site_description = "Concurrent CDS API downloader with an interactive Textual TUI and script mode."
 repo_url = "https://github.com/bgiebl/cdsswarm"
 repo_name = "bgiebl/cdsswarm"
@@ -16,6 +16,8 @@ nav = [
 ]
 
 [project.theme]
+logo = "img/logo.svg"
+favicon = "img/logo.png"
 features = [
   "content.code.copy",
   "navigation.sections",

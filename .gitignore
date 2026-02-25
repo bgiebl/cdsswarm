@@ -10,3 +10,5 @@ dist
 .mypy_cache
 *.swp
 site
+docs/changelog.md
+docs/img/

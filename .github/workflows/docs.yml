@@ -28,7 +28,9 @@ jobs:
           python-version: "3.12"
       - run: pip install zensical
       - run: cp CHANGELOG.md docs/changelog.md
+      - run: cp -r img docs/img
       - run: zensical build --clean
+      - run: cp docs/CNAME site/CNAME
       - uses: actions/upload-pages-artifact@v4
         with:
           path: site

@@ -22,6 +22,22 @@ cd cdsswarm
 pip install -e ".[dev]"
 ```
 
+## Shell Completion
+
+Enable tab completion for bash:
+
+```bash
+echo 'eval "$(cdsswarm completion bash)"' >> ~/.bashrc
+```
+
+Or for zsh:
+
+```bash
+echo 'eval "$(cdsswarm completion zsh)"' >> ~/.zshrc
+```
+
+Restart your shell or run `source ~/.bashrc` (or `~/.zshrc`) to activate.
+
 ## Prerequisites
 
 You need a valid CDS API configuration file at `~/.cdsapirc`:

@@ -1,4 +1,4 @@
-# cdsswarm
+# ![cdsswarm](img/logo.svg){ width="42" style="vertical-align: middle" } cdsswarm
 
 Concurrent [CDS API](https://cds.climate.copernicus.eu/) downloader with an interactive Textual TUI and script mode.
 
