@@ -22,13 +22,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install cdsswarm
-        run: pip install -e .
+      - name: Install cdsswarm and ffmpeg
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          pip install -e .
 
       - name: Record GIF
         uses: charmbracelet/vhs-action@v2
         with:
           path: examples/demo.tape
+          install-fonts: false
 
       - name: Commit updated GIF
         run: |
