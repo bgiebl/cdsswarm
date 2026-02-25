@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.1] - 2026-02-25
+
+### Added
+- Server-aware worker pause/resume: workers pause when CDS server is down and retry with exponential backoff when degraded
+- W-State column in TUI worker table showing worker state (active/paused/retrying)
+- Server status display in MeterBar footer with blinking status dot and reason from ECMWF API
+- File size display for cached (skipped) files in TUI Files tab via `os.path.getsize`
+- Documentation site (MkDocs) with CLI, configuration, Python API, and TUI guides
+
 ## [0.2.0] - 2026-02-25
 
 ### Added
@@ -53,6 +62,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 - Bump GitHub Actions dependencies (checkout v6, setup-python v6, upload-artifact v6, download-artifact v7)
 
+[0.2.1]: https://github.com/bgiebl/cdsswarm/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/bgiebl/cdsswarm/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/bgiebl/cdsswarm/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/bgiebl/cdsswarm/compare/v0.1.5...v0.1.6
