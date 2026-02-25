@@ -157,7 +157,7 @@ class PlainTextAdapter(OutputAdapter):
             self._worker_labels[worker_id] = task.label
         self._write(f"  {self._worker_tag(worker_id)} starting {task.label}")
 
-    def _status_text(self, cds_status: str) -> str:
+    def _status_text(self, cds_status: WorkerStatus) -> str:
         """Format a CDS status name with color and description."""
         desc = _CDS_STATUS_DESCRIPTIONS.get(cds_status, "")
         if self._color:

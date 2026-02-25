@@ -29,13 +29,14 @@ def _format_bytes(size: int) -> str:
     """Format byte count into human-readable size like '1.5 GB'."""
     if size <= 0:
         return "\u2014"
+    fsize = float(size)
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if size < 1024 or unit == "TB":
+        if fsize < 1024 or unit == "TB":
             if unit == "B":
-                return f"{size} {unit}"
-            return f"{size:.1f} {unit}"
-        size = size / 1024
-    return f"{size:.1f} TB"  # pragma: no cover
+                return f"{int(fsize)} {unit}"
+            return f"{fsize:.1f} {unit}"
+        fsize = fsize / 1024
+    return f"{fsize:.1f} TB"  # pragma: no cover
 
 
 def build_summary(

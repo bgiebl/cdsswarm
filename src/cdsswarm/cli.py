@@ -7,10 +7,11 @@ import json
 import os
 import sys
 import time
+from typing import IO, cast
 
 import glob as _glob
 
-from .adapters import LoggingAdapter, PlainTextAdapter, TextualAdapter
+from .adapters import LoggingAdapter, OutputAdapter, PlainTextAdapter, TextualAdapter
 from .core import SwarmDownloader, Task
 from .exceptions import RequestFileError
 from .summary import export_summary, print_summary
@@ -203,9 +204,10 @@ def _run_script(
     pre_messages=None,
 ):
     """Run downloads with plain text output."""
-    adapter = PlainTextAdapter(interactive=not ignore_warnings)
-    if log_file:
-        adapter = LoggingAdapter(adapter, log_file)
+    base_adapter: OutputAdapter = PlainTextAdapter(interactive=not ignore_warnings)
+    adapter: OutputAdapter = (
+        LoggingAdapter(base_adapter, log_file) if log_file else base_adapter
+    )
     downloader = SwarmDownloader(
         tasks=tasks,
         adapter=adapter,
@@ -322,7 +324,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_template(path: str) -> dict:
+def _load_template(path: str) -> dict | list:
     """Load a generate template from a JSON or YAML file."""
     with open(path) as f:
         if path.endswith((".yaml", ".yml")):
@@ -333,9 +335,9 @@ def _load_template(path: str) -> dict:
                     "PyYAML is required for YAML files. "
                     "Install it with: pip install cdsswarm[yaml]"
                 )
-            return yaml.safe_load(f)
+            return yaml.safe_load(f)  # type: ignore[no-any-return]
         else:
-            return json.load(f)
+            return json.load(f)  # type: ignore[no-any-return]
 
 
 def _build_generate_parser() -> argparse.ArgumentParser:
@@ -605,7 +607,7 @@ def main(argv: list[str] | None = None):
         sys.exit(1)
 
     # Apply output_dir: prepend to relative target paths.
-    output_dir = settings["output_dir"]
+    output_dir = str(settings["output_dir"])
     if output_dir:
         resolved_base = os.path.realpath(output_dir)
         for task in tasks:
@@ -632,16 +634,16 @@ def main(argv: list[str] | None = None):
         print(f"\n{len(tasks)} task(s) total")
         sys.exit(0)
 
-    mode = _resolve_mode(settings["mode"])
-    skip_existing = settings["skip_existing"]
-    workers = settings["workers"]
-    resume = settings["resume"]
-    reuse = settings["reuse"]
-    max_retries = settings["max_retries"]
-    ignore_warnings = settings["ignore_warnings"]
-    log_path = settings["log"]
-    summary_path = settings["summary"]
-    post_hook = settings["post_hook"]
+    mode = _resolve_mode(str(settings["mode"]))
+    skip_existing = bool(settings["skip_existing"])
+    workers = cast(int, settings["workers"])
+    resume = bool(settings["resume"])
+    reuse = bool(settings["reuse"])
+    max_retries = cast(int, settings["max_retries"])
+    ignore_warnings = bool(settings["ignore_warnings"])
+    log_path = str(settings["log"])
+    summary_path = str(settings["summary"])
+    post_hook = str(settings["post_hook"])
 
     # --- Session resume logic ---
     from .state import SessionState, session_path
@@ -728,6 +730,7 @@ def main(argv: list[str] | None = None):
 
     # Combine with --log FILE if given
     user_log = open(log_path, "a") if log_path else None
+    log_file: _MultiWriter | IO[str]
     if user_log:
         log_file = _MultiWriter(auto_log, user_log)
     else:

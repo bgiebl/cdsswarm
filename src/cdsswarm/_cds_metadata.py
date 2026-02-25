@@ -261,7 +261,7 @@ def fetch_system_status(url: str = _STATUS_URL) -> str:
     for entry in nodes:
         node = entry.get("node", entry) if isinstance(entry, dict) else {}
         if node.get("Title") == "Data Stores":
-            return node.get("Status", "")
+            return str(node.get("Status", ""))
     return ""
 
 

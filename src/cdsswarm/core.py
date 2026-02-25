@@ -419,7 +419,7 @@ class SwarmDownloader:
         with state.lock:
             if tid not in state.worker_id_map:
                 state.worker_id_map[tid] = next(state.next_id)
-            return state.worker_id_map[tid]
+            return int(state.worker_id_map[tid])
 
     def _cancel_active(self, state: _WorkerState):
         with state.lock:

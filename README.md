@@ -41,7 +41,7 @@ A valid CDS API configuration file at `~/.cdsapirc`:
 
 ```
 url: https://cds.climate.copernicus.eu/api
-key: <your-uid>:<your-api-key>
+key: <your-personal-access-token>
 ```
 
 See the [CDS API documentation](https://cds.climate.copernicus.eu/how-to-api) for setup instructions.

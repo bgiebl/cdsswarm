@@ -270,7 +270,7 @@ class WorkerCancelled(Message):
 # Status styling
 # ---------------------------------------------------------------------------
 
-STATUS_STYLES = {
+STATUS_STYLES: dict[str, str] = {
     WorkerStatus.IDLE: "dim",
     WorkerStatus.ACCEPTED: "bold orange1",
     WorkerStatus.RUNNING: "bold yellow",
@@ -282,7 +282,7 @@ STATUS_STYLES = {
 
 def styled_status(status: WorkerStatus | FileStatus) -> Text:
     """Return a Rich Text with colored status badge."""
-    style = STATUS_STYLES.get(status, "")
+    style = STATUS_STYLES.get(status.value, "")
     return Text(status.value, style=style)
 
 
@@ -473,7 +473,7 @@ class TabStrip(Static):
 
     def on_click(self, event) -> None:
         # "Workers" occupies roughly x < 10, "Files" x >= 10
-        app = self.app
+        app: CdsswarmApp = self.app  # type: ignore[assignment]
         if event.x < 10:
             if app._active_tab != "workers":
                 app.action_switch_tab()
@@ -487,7 +487,7 @@ class KeyBar(Static):
 
     def on_click(self, event) -> None:
         # Approximate hit zones for: q Quit | t Tab | Enter Logs | a Params
-        app = self.app
+        app: CdsswarmApp = self.app  # type: ignore[assignment]
         x = event.x
         if x < 10:
             app.action_quit_app()

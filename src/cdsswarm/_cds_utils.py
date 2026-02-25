@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import threading
+import types
 
 import requests as http_requests
 
@@ -174,10 +175,11 @@ def cancel_cds_request(client, request_id: str):
     Old cdsapi (key with colon): DELETE {url}/tasks/{id}
     New ecmwf.datastores (LegacyClient): POST {url}/retrieve/v1/jobs/delete
     """
+    ds_config: types.ModuleType | None = None
     try:
         from ecmwf.datastores import config as ds_config
     except ImportError:
-        ds_config = None
+        pass
 
     inner = getattr(client, "client", None)
     if inner is not None and hasattr(inner, "_get_headers") and ds_config is not None:
@@ -240,10 +242,11 @@ def list_active_jobs(client, limit=200) -> list[dict]:
 
 def cancel_cds_requests(client, request_ids: list[str]):
     """Cancel multiple CDS requests in one API call (new API) or one-by-one (old API)."""
+    ds_config: types.ModuleType | None = None
     try:
         from ecmwf.datastores import config as ds_config
     except ImportError:
-        ds_config = None
+        pass
 
     inner = getattr(client, "client", None)
     if inner is not None and hasattr(inner, "_get_headers") and ds_config is not None:

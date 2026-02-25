@@ -43,7 +43,7 @@ _TYPE_CHECKS: dict[str, type | tuple[type, ...]] = {
     "post_hook": str,
 }
 
-_VALUE_CHECKS: dict[str, object] = {
+_VALUE_CHECKS: dict[str, tuple[str, ...]] = {
     "mode": ("auto", "interactive", "script"),
 }
 
@@ -71,12 +71,12 @@ def _validate_config(config: dict[str, object], source: str) -> None:
     for key, value in config.items():
         expected = _TYPE_CHECKS.get(key)
         if expected and not isinstance(value, expected):
+            name = expected.__name__ if isinstance(expected, type) else str(expected)
             raise ConfigError(
-                f"{source}: '{key}' must be {expected.__name__}, "
-                f"got {type(value).__name__}"
+                f"{source}: '{key}' must be {name}, got {type(value).__name__}"
             )
         allowed = _VALUE_CHECKS.get(key)
-        if allowed and value not in allowed:
+        if allowed is not None and value not in allowed:
             raise ConfigError(
                 f"{source}: '{key}' must be one of {allowed}, got '{value}'"
             )
