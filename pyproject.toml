@@ -38,6 +38,7 @@ dev = [
     "pytest-cov",
     "pyyaml",
     "pre-commit",
+    "argparse-manpage",
 ]
 
 [project.scripts]

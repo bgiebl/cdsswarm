@@ -1,0 +1,120 @@
+.TH CDSSWARM "1" "2026\-02\-25" "cdsswarm 0.1.5" "cdsswarm Manual"
+.SH NAME
+cdsswarm
+.SH SYNOPSIS
+.B cdsswarm
+[-h] [--version] [-w WORKERS] [-m {interactive,script,auto}] [--no-skip] [--resume | --no-resume] [--reuse | --no-reuse] [--max-retries MAX_RETRIES] [--output-dir OUTPUT_DIR] [--dry-run] [--ignore-warnings] [--log FILE] [--summary FILE] [--post-hook CMD] requests_file
+.SH DESCRIPTION
+Concurrent CDS API downloader with TUI
+
+.TP
+\fBrequests_file\fR
+JSON or YAML file with download requests
+
+.SH OPTIONS
+.TP
+\fB\-\-version\fR
+show program's version number and exit
+
+.TP
+\fB\-w\fR \fI\,WORKERS\/\fR, \fB\-\-workers\fR \fI\,WORKERS\/\fR
+Number of parallel download workers (default: 4)
+
+.TP
+\fB\-m\fR \fI\,{interactive,script,auto}\/\fR, \fB\-\-mode\fR \fI\,{interactive,script,auto}\/\fR
+Display mode (default: auto)
+
+.TP
+\fB\-\-no\-skip\fR
+Re\-download files that already exist
+
+.TP
+\fB\-\-resume\fR, \fB\-\-no\-resume\fR
+Resume interrupted session if state file exists (default: enabled)
+
+.TP
+\fB\-\-reuse\fR, \fB\-\-no\-reuse\fR
+Reuse existing CDS jobs with matching parameters (default: enabled)
+
+.TP
+\fB\-\-max\-retries\fR \fI\,MAX_RETRIES\/\fR
+Max retry attempts per task (default: 3, 1 to disable)
+
+.TP
+\fB\-\-output\-dir\fR \fI\,OUTPUT_DIR\/\fR
+Prepend directory to relative target paths
+
+.TP
+\fB\-\-dry\-run\fR
+Show what would be downloaded without actually downloading
+
+.TP
+\fB\-\-ignore\-warnings\fR
+Auto\-continue on warnings without prompting
+
+.TP
+\fB\-\-log\fR \fI\,FILE\/\fR
+Write timestamped log to FILE
+
+.TP
+\fB\-\-summary\fR \fI\,FILE\/\fR
+Export summary as JSON (.json) or CSV (.csv)
+
+.TP
+\fB\-\-post\-hook\fR \fI\,CMD\/\fR
+Shell command to run after each successful download. Placeholders: {file} (output path), {dataset} (dataset name)
+.SH SUBCOMMANDS
+The following subcommands are available.
+Run \fBcdsswarm \fISUBCOMMAND\fB \-\-help\fR for full usage.
+.SS cdsswarm generate
+Expand a template into a request file
+.P
+Synopsis: \fBcdsswarm generate\fR [\-\-split\-by \fIFIELDS\fR] [\-o \fIFILE\fR] [\-\-dry\-run] \fItemplate_file\fR
+.TP
+\fB-h\fR, \fB--help\fR
+show this help message and exit
+.TP
+\fItemplate_file\fR
+Path to template JSON/YAML file
+.TP
+\fB--split-by\fR
+Comma\-separated split fields (overrides template's split_by)
+.TP
+\fB-o\fR, \fB--output\fR \fIFILE\fR
+Output file path (default: stdout)
+.TP
+\fB--dry-run\fR
+Show task count and targets without writing output
+.SS cdsswarm cancel
+Cancel active CDS API requests
+.P
+Synopsis: \fBcdsswarm cancel\fR [\-y] [\fIrequest_id\fR ...]
+.TP
+\fB-h\fR, \fB--help\fR
+show this help message and exit
+.TP
+\fIrequest_ids\fR
+Specific request IDs to cancel (omit to cancel all active)
+.TP
+\fB-y\fR, \fB--yes\fR
+Skip confirmation prompt
+.SH CONFIGURATION
+Settings are resolved in order: CLI flags > config file > defaults.
+The config file is \fB.cdsswarm.toml\fR in the current directory or any parent.
+See the project README for all available keys.
+.SH EXIT STATUS
+.TP
+\fB0\fR
+All downloads completed successfully.
+.TP
+\fB1\fR
+One or more downloads failed, or the run was cancelled.
+.SH SEE ALSO
+Project homepage: \fIhttps://github.com/bgiebl/cdsswarm\fR
+.SH BUGS
+Report bugs at \fIhttps://github.com/bgiebl/cdsswarm/issues\fR
+
+.SH AUTHOR
+.nf
+Benedikt Giebl <b.giebl@protonmail.com>
+.fi
