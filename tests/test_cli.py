@@ -1603,6 +1603,33 @@ class TestCmdCancelAllJobs:
         assert "server error" in err
 
 
+class TestCmdCompletion:
+    """CLI integration tests for ``cdsswarm completion``."""
+
+    def test_completion_bash(self, capsys):
+        with pytest.raises(SystemExit, match="0"):
+            main(["completion", "bash"])
+
+        out = capsys.readouterr().out
+        assert "AUTOMATICALLY GENERATED" in out
+        assert "cdsswarm" in out
+
+    def test_completion_zsh(self, capsys):
+        with pytest.raises(SystemExit, match="0"):
+            main(["completion", "zsh"])
+
+        out = capsys.readouterr().out
+        assert "#compdef cdsswarm" in out
+
+    def test_completion_no_shell_arg(self, capsys):
+        with pytest.raises(SystemExit, match="2"):
+            main(["completion"])
+
+    def test_completion_invalid_shell(self, capsys):
+        with pytest.raises(SystemExit, match="2"):
+            main(["completion", "fish"])
+
+
 class TestMultiWriter:
     def test_write_to_multiple(self):
         a = io.StringIO()

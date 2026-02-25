@@ -232,6 +232,18 @@ When no IDs are given, cdsswarm queries the CDS server for all active (accepted/
 | `request_ids` | Specific request IDs to cancel (omit to cancel all active) |
 | `-y`, `--yes` | Skip confirmation prompt |
 
+### Shell completion
+
+Tab-completion for subcommands and flags is available for bash and zsh:
+
+```bash
+# Bash (add to ~/.bashrc)
+eval "$(cdsswarm completion bash)"
+
+# Zsh (add to ~/.zshrc)
+eval "$(cdsswarm completion zsh)"
+```
+
 ### Session resume
 
 cdsswarm automatically saves session state after each task completes. If a download session is interrupted (e.g. by `Ctrl+C` or a network failure), rerunning the same command picks up where it left off — completed tasks are skipped and failed/pending tasks are retried.
