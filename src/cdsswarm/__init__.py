@@ -22,6 +22,7 @@ Usage as a Python library:
     results = cdsswarm.download(tasks, num_workers=4)
 """
 
+from collections.abc import Callable
 from importlib.metadata import version as _pkg_version
 
 from .adapters import PlainTextAdapter
@@ -49,7 +50,7 @@ def download(
     skip_existing: bool = True,
     reuse_jobs: bool = True,
     max_retries: int = 3,
-    on_message=None,
+    on_message: Callable[[str], None] | None = None,
     post_hook: str = "",
 ) -> list[Result]:
     """Download multiple CDS API requests concurrently.

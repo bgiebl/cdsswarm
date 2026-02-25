@@ -6,4 +6,6 @@ build
 dist
 .pytest_cache
 .coverage
+.ruff_cache
+.mypy_cache
 *.swp

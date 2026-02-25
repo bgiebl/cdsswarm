@@ -237,7 +237,7 @@ When no IDs are given, cdsswarm queries the CDS server for all active (accepted/
 
 cdsswarm automatically saves session state after each task completes. If a download session is interrupted (e.g. by `Ctrl+C` or a network failure), rerunning the same command picks up where it left off — completed tasks are skipped and failed/pending tasks are retried.
 
-State files are stored in `~/.cache/cdsswarm/sessions/` (or `$XDG_CACHE_HOME`), keyed by request file path and output directory.
+State files are stored in `~/.cache/cdsswarm/sessions/` (or `$XDG_CACHE_HOME`), keyed by request file path and output directory. Run logs are automatically saved to `~/.local/state/cdsswarm/logs/` (or `$XDG_STATE_HOME`).
 
 ```bash
 cdsswarm requests.json -w 4             # interrupted — 50 of 100 tasks done
@@ -356,6 +356,18 @@ Returns a `list[Result]`. Returns an empty list if interrupted by `KeyboardInter
 | `task` | `Task` | The original task |
 | `success` | `bool` | Whether the download succeeded |
 | `error` | `str` | Error message (empty on success) |
+
+### `cdsswarm.expand_template(template, split_by=None)`
+
+Expand a template dict into a list of `Task` objects via Cartesian product of the `split_by` dimensions.
+
+### `cdsswarm.ConfigError`
+
+Raised for invalid configuration values in config files or CLI flags. Subclass of `ValueError`.
+
+### `cdsswarm.RequestFileError`
+
+Raised for invalid or unrecognized request file formats. Subclass of `ValueError`.
 
 ## TUI
 
