@@ -9,3 +9,4 @@ dist
 .ruff_cache
 .mypy_cache
 *.swp
+site

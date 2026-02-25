@@ -179,12 +179,13 @@ def main():
     total_runs = len(worker_counts) * args.trials
     total_requests = total_runs * len(tasks)
 
-    print(f"Benchmark: {len(tasks)} tasks × {len(worker_counts)} configs × "
-          f"{args.trials} trial(s) = {total_runs} runs")
+    print(
+        f"Benchmark: {len(tasks)} tasks × {len(worker_counts)} configs × "
+        f"{args.trials} trial(s) = {total_runs} runs"
+    )
     print(f"Mode: {mode_label}")
     if not args.reuse:
-        print(f"CDS requests: {total_requests} total "
-              f"(each run submits fresh requests)")
+        print(f"CDS requests: {total_requests} total (each run submits fresh requests)")
     print(f"Request file: {args.requests_file}")
     print(f"Started: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print()
@@ -298,7 +299,9 @@ def main():
             "trials": args.trials,
             "reuse": args.reuse,
             "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-            "runs": {str(w): all_results[w] for w in worker_counts if all_results.get(w)},
+            "runs": {
+                str(w): all_results[w] for w in worker_counts if all_results.get(w)
+            },
         }
         with open(args.output, "w") as f:
             json.dump(export, f, indent=2)
