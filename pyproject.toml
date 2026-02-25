@@ -31,6 +31,7 @@ dependencies = [
     "tqdm",
     "textual>=0.87",
     "tomli>=1.1.0; python_version < '3.11'",
+    "shtab>=1.7",
 ]
 
 [project.optional-dependencies]
