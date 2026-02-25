@@ -18,11 +18,11 @@ Sleep 3s
 Show
 
 # Workers tab: watch status transitions and download progress
-Sleep 8s
+Sleep 10s
 
 # Switch to Files tab
 Type "t"
-Sleep 5s
+Sleep 8s
 
 # Switch back to Workers tab
 Type "t"
