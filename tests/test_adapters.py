@@ -425,7 +425,7 @@ class TestPlainTextAdapter:
         messages.clear()
         # Then recover
         adapter.on_server_stats_update(5, 10, 3, "OK")
-        assert any("Server recovered" in m for m in messages)
+        assert any("[CDS Server] recovered" in m for m in messages)
 
     def test_server_stats_update_resume_message_with_color(self):
         messages = []

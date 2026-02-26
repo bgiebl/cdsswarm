@@ -22,7 +22,8 @@ The table has two tabs:
 | Column | Description |
 |---|---|
 | W | Worker number |
-| Status | Current status (queued, running, successful, failed) |
+| W-State | Worker state: active, paused (server down), or retrying (backoff) |
+| CDS Status | CDS API status (queued, running, successful, failed) |
 | Filename | Target file being downloaded |
 | Started | Time the task started |
 | Elapsed | Time since task started |
@@ -49,7 +50,7 @@ Press `Enter` on a worker row to open a scrollable log showing all status messag
 
 ### Parameters Screen
 
-Press `a` on a worker row to view the full CDS API request parameters for that task. Press `Esc` to return.
+Press `a` to view the full CDS API request parameters for the selected worker or file. On the Workers tab it shows the current task's parameters; on the Files tab it shows the parameters for the selected file. Press `Esc` to return.
 
 ## Display Mode Selection
 

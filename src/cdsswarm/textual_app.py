@@ -457,13 +457,13 @@ class MeterBar(Static):
         if server_queued > 0 or server_running > 0 or system_status:
             status_lower = system_status.lower() if system_status else ""
             if status_lower == "degraded":
-                label = "[blink yellow]●[/] Server ([bold yellow]DEGRADED[/]) [yellow](workers paused)[/]"
+                label = "[blink yellow]●[/] CDS Server ([bold yellow]DEGRADED[/]) [yellow](workers paused)[/]"
             elif status_lower == "down":
-                label = "[blink red]●[/] Server ([bold red]DOWN[/]) [red](workers paused)[/]"
+                label = "[blink red]●[/] CDS Server ([bold red]DOWN[/]) [red](workers paused)[/]"
             elif status_lower == "ok":
-                label = "[green]\u25cf[/] Server ([green]OK[/])"
+                label = "[green]\u25cf[/] CDS Server ([green]OK[/])"
             else:
-                label = "Server"
+                label = "CDS Server"
             parts.append(
                 f"{label}: {server_queued} queued \u2502 {server_running} running"
             )
@@ -561,17 +561,15 @@ class ParamsScreen(Screen):
         Binding("escape", "dismiss", "Back"),
     ]
 
-    def __init__(
-        self, worker_id: int, params: dict, labels: dict | None = None
-    ) -> None:
+    def __init__(self, title: str, params: dict, labels: dict | None = None) -> None:
         super().__init__()
-        self.worker_id = worker_id
+        self.title_text = title
         self.params = params
         self.labels = labels
 
     def compose(self) -> ComposeResult:
         yield _BackBar(
-            f" Worker {self.worker_id} \u2014 Parameters",
+            f" {self.title_text} \u2014 Parameters",
             id="params-header",
         )
         if self.labels:
@@ -1162,13 +1160,25 @@ class CdsswarmApp(App):
         self._update_tab_strip()
 
     def action_open_params(self) -> None:
-        if self._active_tab != "workers":
-            return
-        wt = self.query_one("#worker-table", DataTable)
-        row_idx = wt.cursor_row
-        if 0 <= row_idx < self.num_workers:
-            w = self.worker_data[row_idx]
-            self.push_screen(ParamsScreen(row_idx, w.request_params, w.request_labels))
+        if self._active_tab == "workers":
+            wt = self.query_one("#worker-table", DataTable)
+            row_idx = wt.cursor_row
+            if 0 <= row_idx < self.num_workers:
+                w = self.worker_data[row_idx]
+                self.push_screen(
+                    ParamsScreen(
+                        f"Worker {row_idx}", w.request_params, w.request_labels
+                    )
+                )
+        elif self._active_tab == "files":
+            ft = self.query_one("#files-table", DataTable)
+            row_idx = ft.cursor_row
+            if 0 <= row_idx < len(self.files):
+                f = self.files[row_idx]
+                labels = None
+                if f.worker_id is not None and 0 <= f.worker_id < self.num_workers:
+                    labels = self.worker_data[f.worker_id].request_labels
+                self.push_screen(ParamsScreen(f.label, f.request, labels))
 
     # -- Internal helpers --
 

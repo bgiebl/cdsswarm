@@ -714,7 +714,7 @@ async def test_params_screen_with_labels():
     async with app.run_test() as pilot:
         from textual.widgets import Static
 
-        app.push_screen(ParamsScreen(0, {"k": "v"}, labels={"Label": "Value"}))
+        app.push_screen(ParamsScreen("Worker 0", {"k": "v"}, labels={"Label": "Value"}))
         await pilot.pause()
         assert isinstance(app.screen, ParamsScreen)
         content = app.screen.query_one("#params-content", Static)
@@ -728,7 +728,7 @@ async def test_params_screen_empty():
     async with app.run_test() as pilot:
         from textual.widgets import Static
 
-        app.push_screen(ParamsScreen(0, {}, None))
+        app.push_screen(ParamsScreen("Worker 0", {}, None))
         await pilot.pause()
         content = app.screen.query_one("#params-content", Static)
         assert "\u2014" in str(content.content)
@@ -836,7 +836,57 @@ async def test_ctrl_c_rage_quit():
 
 @pytest.mark.asyncio
 async def test_open_params_on_files_tab():
-    """Pressing 'a' on files tab does not open ParamsScreen."""
+    """Pressing 'a' on files tab opens ParamsScreen for selected file."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        from textual.widgets import Static
+
+        tasks = _make_tasks(3)
+        app.post_message(TasksInitialized(tasks, set()))
+        await pilot.pause()
+        # Assign file to worker and give it labels
+        app.post_message(FileActive(tasks[1].target, 0))
+        await pilot.pause()
+        app.worker_data[0].request_labels = {"Variable": "var_1"}
+        # Switch to files tab, move cursor to row 1
+        await pilot.press("t")
+        assert app._active_tab == "files"
+        await pilot.press("down")
+        await pilot.press("a")
+        await pilot.pause()
+        assert isinstance(app.screen, ParamsScreen)
+        content = app.screen.query_one("#params-content", Static)
+        assert "Variable:" in str(content.content)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, ParamsScreen)
+
+
+@pytest.mark.asyncio
+async def test_open_params_on_files_tab_cached():
+    """Pressing 'a' on a cached file shows raw request params."""
+    app = CdsswarmApp(num_workers=2)
+    async with app.run_test() as pilot:
+        from textual.widgets import Static
+
+        tasks = _make_tasks(2)
+        app.post_message(TasksInitialized(tasks, {tasks[0].target}))
+        await pilot.pause()
+        # Switch to files tab (cursor on row 0 = cached file)
+        await pilot.press("t")
+        assert app._active_tab == "files"
+        await pilot.press("a")
+        await pilot.pause()
+        assert isinstance(app.screen, ParamsScreen)
+        content = app.screen.query_one("#params-content", Static)
+        # Cached file has no labels → falls back to raw params
+        assert "variable:" in str(content.content)
+        assert "var_0" in str(content.content)
+
+
+@pytest.mark.asyncio
+async def test_open_params_on_files_tab_empty():
+    """Pressing 'a' on files tab with no files does nothing."""
     app = CdsswarmApp(num_workers=2)
     async with app.run_test() as pilot:
         await pilot.press("t")
@@ -942,7 +992,7 @@ async def test_server_stats_meter_bar_status_dots():
         ("OK", "[green]"),
         ("Degraded", "[blink yellow]"),
         ("Down", "[blink red]"),
-        ("unknown", "Server:"),
+        ("unknown", "CDS Server:"),
     ]:
         result = meter.render_progress(
             completed=1,

@@ -281,9 +281,9 @@ class PlainTextAdapter(OutputAdapter):
         was_bad = prev_status in ("degraded", "down")
         if is_bad:
             tag = system_status.upper()
-            msg = f"  Server ({tag}): {stats}"
+            msg = f"  [CDS Server] ({tag}): {stats}"
             if self._color:
-                msg = f"\033[1;33m  Server ({tag}): {stats}\033[0m"
+                msg = f"\033[1;33m  [CDS Server] ({tag}): {stats}\033[0m"
             self._write(msg)
             if system_status_message:
                 if self._color:
@@ -297,9 +297,9 @@ class PlainTextAdapter(OutputAdapter):
                     pause_msg = f"\033[1;33m{pause_msg}\033[0m"
                 self._write(pause_msg)
         else:
-            self._write(f"  Server: {stats}")
+            self._write(f"  [CDS Server]: {stats}")
             if was_bad:
-                resume_msg = "  Server recovered, resuming workers"
+                resume_msg = "  [CDS Server] recovered, resuming workers"
                 if self._color:
                     resume_msg = f"\033[1;32m{resume_msg}\033[0m"
                 self._write(resume_msg)
