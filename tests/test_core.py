@@ -706,14 +706,14 @@ class TestSwarmDownloader:
         t.join()
         assert results is None
 
-    @patch("cdsswarm.core.as_completed")
+    @patch("cdsswarm.core.wait")
     @patch("cdsswarm.core.cdsapi")
-    def test_keyboard_interrupt_cancels(self, mock_cdsapi, mock_as_completed, tmp_dir):
-        """KeyboardInterrupt during as_completed returns None with message."""
+    def test_keyboard_interrupt_cancels(self, mock_cdsapi, mock_wait, tmp_dir):
+        """KeyboardInterrupt during wait() returns None with message."""
         mock_client = MagicMock()
         mock_cdsapi.Client.return_value = mock_client
 
-        mock_as_completed.side_effect = KeyboardInterrupt()
+        mock_wait.side_effect = KeyboardInterrupt()
 
         tasks = _make_tasks(tmp_dir, count=1)
         adapter = MagicMock(spec=PlainTextAdapter)
@@ -738,8 +738,8 @@ class TestSwarmDownloader:
         adapter = MagicMock(spec=PlainTextAdapter)
         downloader = SwarmDownloader(tasks, adapter, num_workers=1)
 
-        # Patch as_completed and _cancel_active to both raise KeyboardInterrupt
-        with patch("cdsswarm.core.as_completed", side_effect=KeyboardInterrupt()):
+        # Patch wait and _cancel_active to both raise KeyboardInterrupt
+        with patch("cdsswarm.core.wait", side_effect=KeyboardInterrupt()):
             with patch.object(
                 downloader, "_cancel_active", side_effect=KeyboardInterrupt()
             ):

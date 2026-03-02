@@ -32,6 +32,12 @@ Each CDS request spends most of its time waiting in the server queue and being p
 pip install cdsswarm
 ```
 
+Or via conda-forge:
+
+```bash
+conda install -c conda-forge cdsswarm
+```
+
 For YAML request file support:
 
 ```bash

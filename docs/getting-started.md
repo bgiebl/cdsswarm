@@ -8,6 +8,12 @@ Install from PyPI:
 pip install cdsswarm
 ```
 
+Or via conda-forge:
+
+```bash
+conda install -c conda-forge cdsswarm
+```
+
 For YAML request file support:
 
 ```bash

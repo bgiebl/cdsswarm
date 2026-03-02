@@ -10,7 +10,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
 import cdsapi
@@ -226,48 +226,53 @@ class SwarmDownloader:
         }
 
         try:
-            for future in as_completed(futures):
+            remaining = set(futures.keys())
+            while remaining:
                 if self._cancel_event.is_set():
                     pool.shutdown(wait=False, cancel_futures=True)
                     self._cancel_active(state)
                     return None
-                task = futures[future]
-                completed += 1
-                with state.lock:
-                    wid = state.task_worker_map.get(task.target, 0)
-                    timing = self._task_timing.get(task.target, (0.0, 0.0, 0))
-                    warns = self._task_warnings.get(task.target, [])
-                self._adapter.on_progress_update(completed, len(pending), skipped)
-                try:
-                    future.result()
-                    self._adapter.on_task_completed(wid, task, True)
-                    result = Result(
-                        task=task,
-                        success=True,
-                        start_time=timing[0],
-                        end_time=timing[1],
-                        file_size=timing[2],
-                        warnings=warns,
-                    )
-                    results.append(result)
-                    if self._on_task_done is not None:
-                        rid = self._task_request_ids.get(task.target, "")
-                        self._on_task_done(result, rid)
-                except Exception as e:
-                    self._adapter.on_task_completed(wid, task, False, str(e))
-                    result = Result(
-                        task=task,
-                        success=False,
-                        error=str(e),
-                        start_time=timing[0],
-                        end_time=timing[1],
-                        file_size=timing[2],
-                        warnings=warns,
-                    )
-                    results.append(result)
-                    if self._on_task_done is not None:
-                        rid = self._task_request_ids.get(task.target, "")
-                        self._on_task_done(result, rid)
+                done, remaining = wait(
+                    remaining, timeout=0.5, return_when=FIRST_COMPLETED
+                )
+                for future in done:
+                    task = futures[future]
+                    completed += 1
+                    with state.lock:
+                        wid = state.task_worker_map.get(task.target, 0)
+                        timing = self._task_timing.get(task.target, (0.0, 0.0, 0))
+                        warns = self._task_warnings.get(task.target, [])
+                    self._adapter.on_progress_update(completed, len(pending), skipped)
+                    try:
+                        future.result()
+                        self._adapter.on_task_completed(wid, task, True)
+                        result = Result(
+                            task=task,
+                            success=True,
+                            start_time=timing[0],
+                            end_time=timing[1],
+                            file_size=timing[2],
+                            warnings=warns,
+                        )
+                        results.append(result)
+                        if self._on_task_done is not None:
+                            rid = self._task_request_ids.get(task.target, "")
+                            self._on_task_done(result, rid)
+                    except Exception as e:
+                        self._adapter.on_task_completed(wid, task, False, str(e))
+                        result = Result(
+                            task=task,
+                            success=False,
+                            error=str(e),
+                            start_time=timing[0],
+                            end_time=timing[1],
+                            file_size=timing[2],
+                            warnings=warns,
+                        )
+                        results.append(result)
+                        if self._on_task_done is not None:
+                            rid = self._task_request_ids.get(task.target, "")
+                            self._on_task_done(result, rid)
         except KeyboardInterrupt:
             self._cancel_event.set()
             self._adapter.on_global_message("Interrupted — cancelling CDS requests...")
