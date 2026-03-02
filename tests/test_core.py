@@ -1,12 +1,13 @@
 """Tests for core download engine."""
 
+import io
 import os
 import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cdsswarm.adapters import PlainTextAdapter
+from cdsswarm.adapters import LoggingAdapter, PlainTextAdapter
 from cdsswarm.core import Result, SwarmDownloader, Task
 
 
@@ -543,6 +544,35 @@ class TestSwarmDownloader:
         assert "Traceback (most recent call last)" in caplog.text
         assert "bad value(s) in fds_to_keep" in caplog.text
         assert "fake_retrieve" in caplog.text
+
+    @patch("cdsswarm.core.cdsapi")
+    def test_retry_traceback_reaches_log_file(self, mock_cdsapi, tmp_dir):
+        """Retry tracebacks are routed through the adapter into the log file."""
+        mock_client = MagicMock()
+        call_count = [0]
+
+        def fake_retrieve(dataset, request, target):
+            call_count[0] += 1
+            if call_count[0] < 2:
+                raise ValueError("bad value(s) in fds_to_keep")
+            with open(target, "w") as f:
+                f.write("data")
+
+        mock_client.retrieve.side_effect = fake_retrieve
+        mock_cdsapi.Client.return_value = mock_client
+
+        tasks = _make_tasks(tmp_dir, count=1)
+        log_file = io.StringIO()
+        inner = PlainTextAdapter()
+        adapter = LoggingAdapter(inner, log_file)
+        downloader = SwarmDownloader(tasks, adapter, num_workers=1, max_retries=3)
+        results = downloader.run()
+
+        assert results is not None
+        assert results[0].success
+        log_content = log_file.getvalue()
+        assert "Traceback (most recent call last)" in log_content
+        assert "bad value(s) in fds_to_keep" in log_content
 
     @patch("cdsswarm.core.cdsapi")
     def test_cancel_sets_event_and_shuts_down(self, mock_cdsapi, tmp_dir):
@@ -1251,4 +1281,5 @@ class TestSwarmDownloader:
         downloader.run()
         retry_msgs = [m for m in task_messages if "server degraded" in m]
         assert len(retry_msgs) == 1
-        assert "1/" not in retry_msgs[0]  # no "1/3" counter
+        first_line = retry_msgs[0].split("\n")[0]
+        assert "1/" not in first_line  # no "1/3" counter

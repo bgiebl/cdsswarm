@@ -398,13 +398,13 @@ class SwarmDownloader:
                         self._adapter.on_task_message(
                             wid,
                             f"Attempt {attempt} failed (server degraded): "
-                            f"{exc}, retrying in {delay}s...",
+                            f"{exc}, retrying in {delay}s...\n{tb}",
                         )
                     else:
                         self._adapter.on_task_message(
                             wid,
                             f"Attempt {attempt}/{self._max_retries} failed: "
-                            f"{exc}, retrying in {delay}s...",
+                            f"{exc}, retrying in {delay}s...\n{tb}",
                         )
                     reuse_id = None  # don't reuse a broken job
                     self._adapter.on_worker_state(wid, "retrying")
