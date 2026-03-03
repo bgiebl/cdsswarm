@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.3] - 2026-03-03
+
+### Changed
+- Replace `open(os.devnull)` with no-op `_NullWriter` in tqdm progress router to avoid holding a real file descriptor across worker threads ([#6](https://github.com/bgiebl/cdsswarm/issues/6))
+
 ## [0.2.1] - 2026-02-25
 
 ### Added

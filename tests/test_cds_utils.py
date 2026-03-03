@@ -171,7 +171,6 @@ class TestInstallProgressRouter:
 
         assert router_state  # Should not be empty
         assert "patches" in router_state
-        assert "devnull" in router_state
         assert len(router_state["patches"]) > 0
 
         # tqdm.tqdm should be patched
@@ -181,8 +180,6 @@ class TestInstallProgressRouter:
 
         # tqdm.tqdm should be restored
         assert tqdm.tqdm is original_tqdm
-        # devnull should be closed
-        assert router_state["devnull"].closed
 
     def test_uninstall_empty_state(self):
         """uninstall_progress_router handles empty/None state."""
@@ -262,18 +259,18 @@ class TestInstallProgressRouter:
 
         state = {
             "patches": [(FrozenModule(), "tqdm", None)],
-            "devnull": MagicMock(),
         }
         # Should not raise
         uninstall_progress_router(state)
 
-    def test_uninstall_close_exception(self):
-        """uninstall_progress_router handles devnull close exception."""
-        devnull = MagicMock()
-        devnull.close.side_effect = OSError("already closed")
-        state = {"patches": [], "devnull": devnull}
-        # Should not raise
-        uninstall_progress_router(state)
+    def test_null_writer(self):
+        """_NullWriter behaves as a no-op file-like object."""
+        from cdsswarm._cds_utils import _NullWriter
+
+        w = _NullWriter()
+        w.write("ignored")
+        w.flush()
+        assert w.isatty() is False
 
     def test_tqdm_not_importable(self):
         """Returns empty dict when tqdm is not available."""

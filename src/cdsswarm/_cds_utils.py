@@ -1,7 +1,6 @@
 """CDS API utilities: status parsing, request cancellation, progress routing."""
 
 import logging
-import os
 import re
 import sys
 import threading
@@ -272,10 +271,23 @@ def cancel_cds_requests(client, request_ids: list[str]):
             resp.raise_for_status()
 
 
+class _NullWriter:
+    """No-op writer that avoids holding a real OS file descriptor."""
+
+    def write(self, *args, **kwargs):
+        pass
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+
 def install_progress_router(adapter, worker_id_map, id_lock):
     """Monkey-patch tqdm so cdsapi download progress goes through our adapter.
 
-    Returns a dict ``{"patches": [...], "devnull": file_handle}`` for cleanup.
+    Returns a dict ``{"patches": [...]}`` for cleanup.
     """
     try:
         import tqdm as tqdm_mod
@@ -283,11 +295,11 @@ def install_progress_router(adapter, worker_id_map, id_lock):
         return {}
 
     orig_tqdm = tqdm_mod.tqdm
-    _devnull = open(os.devnull, "w")
+    _null_writer = _NullWriter()
 
     class _ProgressTqdm(orig_tqdm):
         def __init__(self, *args, **kwargs):
-            kwargs["file"] = _devnull
+            kwargs["file"] = _null_writer
             kwargs["disable"] = False
             super().__init__(*args, **kwargs)
             self._last_pct = -1
@@ -324,21 +336,15 @@ def install_progress_router(adapter, worker_id_map, id_lock):
             except Exception:
                 pass
 
-    return {"patches": patched, "devnull": _devnull}
+    return {"patches": patched}
 
 
 def uninstall_progress_router(router_state):
-    """Restore original tqdm references and close the devnull file handle."""
+    """Restore original tqdm references."""
     if not router_state:
         return
     for mod, attr, orig in router_state.get("patches", []):
         try:
             setattr(mod, attr, orig)
-        except Exception:
-            pass
-    devnull = router_state.get("devnull")
-    if devnull is not None:
-        try:
-            devnull.close()
         except Exception:
             pass
