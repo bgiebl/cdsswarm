@@ -31,7 +31,7 @@ jobs:
       - run: cp -r img docs/img
       - run: zensical build --clean
       - run: cp docs/CNAME site/CNAME
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
       - uses: actions/deploy-pages@v4
