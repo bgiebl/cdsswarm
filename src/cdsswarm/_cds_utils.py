@@ -95,7 +95,7 @@ def find_reusable_jobs(client, tasks, limit=200) -> dict[str, str]:
         try:
             _scan_jobs(inner, status, limit, needed_datasets, needed, reuse_map)
         except Exception as exc:
-            log.debug("Job scan for status=%s failed: %s", status, exc)
+            log.debug("Job scan for status=%s failed: %s", status, exc, exc_info=True)
             continue
         remaining = sum(len(v) for v in needed.values())
 
@@ -116,7 +116,7 @@ def _scan_jobs(inner, status, limit, needed_datasets, needed, reuse_map):
             limit=limit,
         )
     except Exception as exc:
-        log.debug("get_jobs(status=%s) failed: %s", status, exc)
+        log.debug("get_jobs(status=%s) failed: %s", status, exc, exc_info=True)
         return
 
     # Jobs are plain dicts in the paginated JSON response
@@ -132,7 +132,7 @@ def _scan_jobs(inner, status, limit, needed_datasets, needed, reuse_map):
             remote = inner.get_remote(job_id)
             norm_job = normalize_request(dict(remote.request))
         except Exception as exc:
-            log.debug("get_remote(%s) failed: %s", job_id, exc)
+            log.debug("get_remote(%s) failed: %s", job_id, exc, exc_info=True)
             continue
         key = (process_id, _dict_key(norm_job))
         if key in needed:
@@ -222,7 +222,7 @@ def list_active_jobs(client, limit=200) -> list[dict]:
                 limit=limit,
             )
         except Exception as exc:
-            log.debug("get_jobs(status=%s) failed: %s", status, exc)
+            log.debug("get_jobs(status=%s) failed: %s", status, exc, exc_info=True)
             continue
         for job in response._json_dict.get("jobs", []):
             job_id = job.get("jobID")
@@ -333,8 +333,12 @@ def install_progress_router(adapter, worker_id_map, id_lock):
                 if getattr(mod, attr) is orig_tqdm:
                     setattr(mod, attr, _ProgressTqdm)
                     patched.append((mod, attr, orig_tqdm))
-            except Exception:
-                pass
+            except Exception as exc:
+                # Some module attributes raise on getattr/setattr (lazy imports,
+                # read-only descriptors). Skipping them is expected.
+                log.debug(
+                    "tqdm patch of %s.%s failed: %s", mod_name, attr, exc, exc_info=True
+                )
 
     return {"patches": patched}
 
@@ -346,5 +350,6 @@ def uninstall_progress_router(router_state):
     for mod, attr, orig in router_state.get("patches", []):
         try:
             setattr(mod, attr, orig)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Best effort: a module may have been reloaded or torn down.
+            log.debug("tqdm unpatch of %s failed: %s", attr, exc, exc_info=True)

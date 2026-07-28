@@ -20,6 +20,7 @@ from cdsswarm.textual_app import (
     ProgressUpdate,
     ServerStatsUpdate,
     TasksInitialized,
+    WorkerCancelled,
     WorkerCdsStatus,
     WorkerData,
     WorkerDatasetTitle,
@@ -28,17 +29,15 @@ from cdsswarm.textual_app import (
     WorkerInfoPanel,
     WorkerMessage,
     WorkerProgress,
-    WorkerStateUpdate,
     WorkerRequestId,
     WorkerRequestLabels,
     WorkerServerTimestamps,
     WorkerStarted,
-    WorkerCancelled,
+    WorkerStateUpdate,
     format_eta,
     format_size,
     styled_status,
 )
-
 
 # ---------------------------------------------------------------------------
 # Formatting helper tests

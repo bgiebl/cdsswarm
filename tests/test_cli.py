@@ -104,9 +104,11 @@ class TestLoadRequests:
         with open(path, "w") as f:
             f.write("- dataset: ds\n  request: {}\n  target: out.grib\n")
 
-        with patch.dict(sys.modules, {"yaml": None}):
-            with pytest.raises(ImportError, match="PyYAML is required"):
-                load_requests(path)
+        with (
+            patch.dict(sys.modules, {"yaml": None}),
+            pytest.raises(ImportError, match="PyYAML is required"),
+        ):
+            load_requests(path)
 
     def test_invalid_format(self, tmp_dir):
         from cdsswarm.exceptions import RequestFileError
@@ -924,9 +926,11 @@ class TestCmdGenerate:
         with open(path, "w") as f:
             f.write("dataset: ds\n")
 
-        with patch.dict(_sys.modules, {"yaml": None}):
-            with pytest.raises(SystemExit, match="1"):
-                main(["generate", path])
+        with (
+            patch.dict(_sys.modules, {"yaml": None}),
+            pytest.raises(SystemExit, match="1"),
+        ):
+            main(["generate", path])
 
         err = capsys.readouterr().err
         assert "PyYAML is required" in err
@@ -1067,7 +1071,7 @@ class TestSessionResume:
 
     def test_corrupt_state_file_starts_fresh(self, tmp_dir, capsys):
         """Corrupt state file triggers a warning and starts fresh."""
-        path, tasks = self._write_tasks(tmp_dir, count=1)
+        path, _tasks = self._write_tasks(tmp_dir, count=1)
         cache_dir = os.path.join(tmp_dir, "cache")
 
         with patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}):

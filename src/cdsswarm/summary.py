@@ -82,14 +82,14 @@ def build_summary(
             "tasks_failed": failed,
             "tasks_total": len(results),
             "total_size": total_size,
-            "started": datetime.datetime.fromtimestamp(wall_start).isoformat(
-                timespec="seconds"
-            )
+            "started": datetime.datetime.fromtimestamp(wall_start)
+            .astimezone()
+            .isoformat(timespec="seconds")
             if wall_start > 0
             else "",
-            "finished": datetime.datetime.fromtimestamp(wall_end).isoformat(
-                timespec="seconds"
-            )
+            "finished": datetime.datetime.fromtimestamp(wall_end)
+            .astimezone()
+            .isoformat(timespec="seconds")
             if wall_end > 0
             else "",
         },

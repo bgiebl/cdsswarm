@@ -78,7 +78,10 @@ class SessionState:
         with open(path) as f:
             data = json.load(f)
         if not isinstance(data, dict):
-            raise ValueError(
+            # Malformed *file content*, not a bad argument type. The adjacent
+            # version check raises ValueError too, and both callers and tests
+            # treat ValueError as "corrupt session file".
+            raise ValueError(  # noqa: TRY004
                 f"Invalid session file: expected object, got {type(data).__name__}"
             )
         version = data.get("version")
@@ -167,9 +170,7 @@ class SessionState:
         """Targets not completed, or completed but file missing on disk."""
         result = []
         for target, ts in self.tasks.items():
-            if ts.status != "completed":
-                result.append(target)
-            elif not os.path.exists(target):
+            if ts.status != "completed" or not os.path.exists(target):
                 result.append(target)
         return result
 

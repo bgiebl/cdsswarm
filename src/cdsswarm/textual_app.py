@@ -7,11 +7,12 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.message import Message
 from textual.screen import Screen
 from textual.theme import Theme
@@ -22,7 +23,6 @@ from textual.widgets import (
 )
 
 from .status import FileStatus, WorkerStatus
-
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
@@ -360,7 +360,7 @@ class WorkerInfoPanel(Static):
                 end_dt = datetime.now(timezone.utc)
             delta = (end_dt - created_dt).total_seconds()
             return format_eta(delta) if delta >= 0 else ""
-        except Exception:
+        except (ValueError, TypeError, AttributeError):
             return ""
 
 
@@ -406,8 +406,6 @@ class FilesInfoPanel(Static):
 
 class HeaderBar(Static):
     """Compact header bar: app title + worker count + clock."""
-
-    pass
 
 
 class MeterBar(Static):
@@ -527,7 +525,7 @@ class _BackBar(Static):
 class LogScreen(Screen):
     """Full-screen log view for a worker."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "dismiss", "Back"),
     ]
 
@@ -557,7 +555,7 @@ class LogScreen(Screen):
 class ParamsScreen(Screen):
     """Full-screen parameter view for a worker."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "dismiss", "Back"),
     ]
 
@@ -734,7 +732,7 @@ class CdsswarmApp(App):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("q", "quit_app", "Quit", priority=True),
         Binding("ctrl+c", "ctrl_c", "Force Quit", show=False, priority=True),
         Binding("t", "switch_tab", "Switch Tab"),

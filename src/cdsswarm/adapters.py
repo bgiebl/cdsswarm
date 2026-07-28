@@ -105,7 +105,6 @@ class OutputAdapter(ABC):
 
     def on_worker_state(self, worker_id: int, state: str):
         """Update worker state: 'active', 'paused', or 'retrying'."""
-        pass
 
     def on_server_stats_update(
         self,
@@ -452,7 +451,7 @@ class LoggingAdapter(OutputAdapter):
         self._log_file = log_file
 
     def _write(self, line: str):
-        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ts = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
         self._log_file.write(f"[{ts}] {line}\n")
         self._log_file.flush()
 

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import glob as _glob
 import json
 import os
 import sys
 import time
 from typing import IO, cast
-
-import glob as _glob
 
 from .adapters import LoggingAdapter, OutputAdapter, PlainTextAdapter, TextualAdapter
 from .core import SwarmDownloader, Task
@@ -501,7 +501,9 @@ def _cmd_cancel(argv: list[str]) -> None:
             try:
                 cancel_cds_request(client, rid)
                 print(f"  Cancelled {rid}")
-            except Exception as exc:
+            # CLI boundary: the CDS client raises arbitrary exception types, and
+            # one failed cancellation must not abort the remaining ones.
+            except Exception as exc:  # noqa: BLE001
                 print(f"  Failed to cancel {rid}: {exc}", file=sys.stderr)
                 failed += 1
 
@@ -549,7 +551,8 @@ def _cmd_cancel(argv: list[str]) -> None:
     try:
         cancel_cds_requests(client, ids_to_cancel)
         print(f"Cancelled {len(ids_to_cancel)} request(s).")
-    except Exception as exc:
+    # CLI boundary: report any client failure as a clean error, not a traceback.
+    except Exception as exc:  # noqa: BLE001
         print(f"Error cancelling requests: {exc}", file=sys.stderr)
         sys.exit(1)
 
@@ -809,52 +812,50 @@ def main(argv: list[str] | None = None):
     # Always-on auto-log
     auto_dir = _log_dir()
     os.makedirs(auto_dir, exist_ok=True)
-    auto_log = open(_auto_log_path(), "w")
-
-    # Combine with --log FILE if given
-    user_log = open(log_path, "a") if log_path else None
-    log_file: _MultiWriter | IO[str]
-    if user_log:
-        log_file = _MultiWriter(auto_log, user_log)
-    else:
-        log_file = auto_log
-
     try:
-        wall_start = time.time()
-        if mode == "interactive":
-            results = _run_interactive(
-                tasks,
-                workers,
-                skip_existing,
-                reuse,
-                max_retries,
-                log_file=log_file,
-                post_hook=post_hook,
-                on_task_done=_on_task_done,
-                on_request_id=_on_request_id,
-                initial_reuse_map=saved_reuse,
-                pre_messages=pre_messages,
-            )
-        else:
-            results = _run_script(
-                tasks,
-                workers,
-                skip_existing,
-                reuse,
-                max_retries,
-                log_file=log_file,
-                ignore_warnings=ignore_warnings,
-                post_hook=post_hook,
-                on_task_done=_on_task_done,
-                on_request_id=_on_request_id,
-                initial_reuse_map=saved_reuse,
-                pre_messages=pre_messages,
-            )
-        wall_end = time.time()
+        with contextlib.ExitStack() as stack:
+            auto_log = stack.enter_context(open(_auto_log_path(), "w"))
+
+            # Combine with --log FILE if given
+            user_log = stack.enter_context(open(log_path, "a")) if log_path else None
+            log_file: _MultiWriter | IO[str]
+            if user_log:
+                log_file = _MultiWriter(auto_log, user_log)
+            else:
+                log_file = auto_log
+
+            wall_start = time.time()
+            if mode == "interactive":
+                results = _run_interactive(
+                    tasks,
+                    workers,
+                    skip_existing,
+                    reuse,
+                    max_retries,
+                    log_file=log_file,
+                    post_hook=post_hook,
+                    on_task_done=_on_task_done,
+                    on_request_id=_on_request_id,
+                    initial_reuse_map=saved_reuse,
+                    pre_messages=pre_messages,
+                )
+            else:
+                results = _run_script(
+                    tasks,
+                    workers,
+                    skip_existing,
+                    reuse,
+                    max_retries,
+                    log_file=log_file,
+                    ignore_warnings=ignore_warnings,
+                    post_hook=post_hook,
+                    on_task_done=_on_task_done,
+                    on_request_id=_on_request_id,
+                    initial_reuse_map=saved_reuse,
+                    pre_messages=pre_messages,
+                )
+            wall_end = time.time()
     finally:
-        auto_log.close()
-        if user_log:
-            user_log.close()
         _rotate_logs(auto_dir)
 
     if results is None:

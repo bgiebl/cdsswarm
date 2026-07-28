@@ -24,6 +24,8 @@ from cdsswarm.textual_app import (
     ServerStatsUpdate,
     TasksInitialized,
     WorkerCdsStatus,
+    WorkerDatasetTitle,
+    WorkerFileSize,
     WorkerFinished,
     WorkerMessage,
     WorkerProgress,
@@ -31,8 +33,6 @@ from cdsswarm.textual_app import (
     WorkerRequestLabels,
     WorkerServerTimestamps,
     WorkerStarted,
-    WorkerDatasetTitle,
-    WorkerFileSize,
 )
 
 # Simulated filenames
