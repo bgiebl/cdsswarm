@@ -176,9 +176,9 @@ class TestLoadConfig:
         with (
             patch("cdsswarm.config.USER_CONFIG_PATH", user_cfg),
             patch("cdsswarm.config.Path.cwd", return_value=tmp_path),
+            pytest.raises(ValueError, match="must be int"),
         ):
-            with pytest.raises(ValueError, match="must be int"):
-                load_config()
+            load_config()
 
 
 class TestResolveSettings:

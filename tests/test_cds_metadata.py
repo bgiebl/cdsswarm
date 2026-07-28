@@ -6,7 +6,6 @@ import time
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 import requests as http_requests
 
 from cdsswarm._cds_metadata import (

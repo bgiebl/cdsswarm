@@ -160,6 +160,7 @@ class TestInstallProgressRouter:
     def test_patches_and_restores_tqdm(self):
         """install_progress_router patches tqdm, uninstall restores it."""
         import threading
+
         import tqdm
 
         adapter = MagicMock()
@@ -189,6 +190,7 @@ class TestInstallProgressRouter:
     def test_progress_tqdm_routes_updates(self):
         """_ProgressTqdm routes download progress through the adapter."""
         import threading
+
         import tqdm
 
         adapter = MagicMock()
@@ -214,6 +216,7 @@ class TestInstallProgressRouter:
     def test_progress_tqdm_deduplicates_same_pct(self):
         """_ProgressTqdm skips update when percentage hasn't changed."""
         import threading
+
         import tqdm
 
         adapter = MagicMock()
@@ -235,6 +238,7 @@ class TestInstallProgressRouter:
     def test_progress_tqdm_no_total(self):
         """_ProgressTqdm with no total doesn't crash on update."""
         import threading
+
         import tqdm
 
         adapter = MagicMock()
@@ -280,8 +284,9 @@ class TestInstallProgressRouter:
         try:
             sys.modules["tqdm"] = None  # type: ignore
             # Re-import to test the ImportError path
-            import cdsswarm._cds_utils as utils_mod
             import threading
+
+            import cdsswarm._cds_utils as utils_mod
 
             result = utils_mod.install_progress_router(
                 MagicMock(), {}, threading.Lock()

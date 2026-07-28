@@ -280,7 +280,8 @@ class TestPlainTextAdapter:
                     adapter.on_task_progress(wid, total * pct // 100, total)
                 adapter.on_progress_update(wid + 1, 8, 0)
                 adapter.on_task_completed(wid, task, success=True)
-            except Exception as exc:
+            # Test harness: any thread failure is collected and asserted on below.
+            except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
@@ -312,7 +313,8 @@ class TestPlainTextAdapter:
                 barrier.wait()
                 for _ in range(50):
                     adapter.on_task_message(0, "Request is queued")
-            except Exception as exc:
+            # Test harness: any thread failure is collected and asserted on below.
+            except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
@@ -547,7 +549,7 @@ class TestLoggingAdapter:
         inner.on_server_stats_update.assert_called_once_with(5, 10, 3, "OK", "")
 
     def test_on_server_stats_update_with_message(self):
-        adapter, inner, log_file = self._make_adapter()
+        adapter, _inner, log_file = self._make_adapter()
         adapter.on_server_stats_update(5, 10, 3, "Degraded", "DSS upgrade")
         log = log_file.getvalue()
         assert "server status message: DSS upgrade" in log

@@ -218,7 +218,9 @@ class MetadataPoller:
 # Server-wide stats (unauthenticated scraping)
 # ---------------------------------------------------------------------------
 
-_NEXT_DATA_RE = re.compile(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
+_NEXT_DATA_RE = re.compile(
+    r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL
+)
 
 _LIVE_URL = "https://cds.climate.copernicus.eu/live"
 _STATUS_URL = "https://apps.ecmwf.int/status/status"

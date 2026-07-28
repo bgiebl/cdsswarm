@@ -769,11 +769,11 @@ class TestSwarmDownloader:
         downloader = SwarmDownloader(tasks, adapter, num_workers=1)
 
         # Patch wait and _cancel_active to both raise KeyboardInterrupt
-        with patch("cdsswarm.core.wait", side_effect=KeyboardInterrupt()):
-            with patch.object(
-                downloader, "_cancel_active", side_effect=KeyboardInterrupt()
-            ):
-                results = downloader.run()
+        with (
+            patch("cdsswarm.core.wait", side_effect=KeyboardInterrupt()),
+            patch.object(downloader, "_cancel_active", side_effect=KeyboardInterrupt()),
+        ):
+            results = downloader.run()
 
         assert results is None
         force_msgs = [

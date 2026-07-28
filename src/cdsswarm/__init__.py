@@ -33,14 +33,14 @@ from .summary import build_summary
 
 __version__ = _pkg_version("cdsswarm")
 __all__ = [
-    "Task",
+    "ConfigError",
+    "RequestFileError",
     "Result",
+    "Task",
+    "__version__",
     "build_summary",
     "download",
     "expand_template",
-    "ConfigError",
-    "RequestFileError",
-    "__version__",
 ]
 
 

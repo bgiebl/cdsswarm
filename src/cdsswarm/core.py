@@ -14,6 +14,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
 import cdsapi
+
 from ._cds_metadata import LiveScraper, MetadataPoller
 from ._cds_utils import (
     cancel_cds_request,
@@ -171,7 +172,9 @@ class SwarmDownloader:
                     lookup_client = cdsapi.Client(quiet=True, progress=False)
                     api_reuse = find_reusable_jobs(lookup_client, tasks_to_scan)
                     reuse_map.update(api_reuse)
-                except Exception as exc:
+                # Reuse lookup is an optimisation: any failure must fall back to
+                # submitting fresh requests rather than abort the run.
+                except Exception as exc:  # noqa: BLE001
                     self._adapter.on_global_message(
                         f"Job reuse lookup failed ({exc}), submitting new requests"
                     )
@@ -258,7 +261,9 @@ class SwarmDownloader:
                         if self._on_task_done is not None:
                             rid = self._task_request_ids.get(task.target, "")
                             self._on_task_done(result, rid)
-                    except Exception as e:
+                    # Worker resilience boundary: any task failure is recorded as
+                    # a failed Result so the remaining tasks keep running.
+                    except Exception as e:  # noqa: BLE001
                         self._adapter.on_task_completed(wid, task, False, str(e))
                         result = Result(
                             task=task,
@@ -324,7 +329,7 @@ class SwarmDownloader:
         def _info_cb(msg, *args):
             try:
                 formatted = msg % args if args else str(msg)
-            except Exception:
+            except (TypeError, ValueError):
                 formatted = str(msg)
             _check_request_id(formatted)
             self._adapter.on_task_message(wid, formatted)
@@ -332,7 +337,7 @@ class SwarmDownloader:
         def _debug_cb(msg, *args):
             try:
                 formatted = msg % args if args else str(msg)
-            except Exception:
+            except (TypeError, ValueError):
                 formatted = str(msg)
             _check_request_id(formatted)
 
@@ -435,7 +440,9 @@ class SwarmDownloader:
         )
         self._adapter.on_task_hook_started(wid, cmd)
         try:
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            result = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, check=False
+            )
             if result.returncode != 0:
                 stderr = result.stderr.strip()
                 warning = f"exit code {result.returncode}"
@@ -448,7 +455,9 @@ class SwarmDownloader:
                     )
             else:
                 self._adapter.on_task_hook_finished(wid, True)
-        except Exception as exc:
+        # Documented contract: a post-hook failure downgrades to a warning and
+        # never fails the download itself.
+        except Exception as exc:  # noqa: BLE001
             warning = str(exc)
             self._adapter.on_task_hook_finished(wid, False, warning)
             with state.lock:
@@ -478,5 +487,6 @@ class SwarmDownloader:
                 wid = state.task_worker_map.get(target)
                 if wid is not None:
                     self._adapter.on_task_cancelled(wid)
-            except Exception as exc:
+            # One failed cancellation must not stop the others during shutdown.
+            except Exception as exc:  # noqa: BLE001
                 self._adapter.on_global_message(f"  Failed to cancel {rid}: {exc}")

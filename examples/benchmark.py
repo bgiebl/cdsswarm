@@ -187,7 +187,7 @@ def main():
     if not args.reuse:
         print(f"CDS requests: {total_requests} total (each run submits fresh requests)")
     print(f"Request file: {args.requests_file}")
-    print(f"Started: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    print(f"Started: {datetime.datetime.now().astimezone().strftime('%Y-%m-%d %H:%M')}")
     print()
 
     # Warmup phase for reuse mode
@@ -273,7 +273,9 @@ def main():
     print()
     print(f"  Tasks: {total_tasks} ({first['ok']} ok, {first['failed']} failed)")
     print(f"  Total size: {_format_size(first['total_size'])}")
-    print(f"  Finished: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    print(
+        f"  Finished: {datetime.datetime.now().astimezone().strftime('%Y-%m-%d %H:%M')}"
+    )
     print("=" * 60)
 
     # Markdown table for README
@@ -298,7 +300,9 @@ def main():
             "num_tasks": len(tasks),
             "trials": args.trials,
             "reuse": args.reuse,
-            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+            "timestamp": datetime.datetime.now()
+            .astimezone()
+            .isoformat(timespec="seconds"),
             "runs": {
                 str(w): all_results[w] for w in worker_counts if all_results.get(w)
             },

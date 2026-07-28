@@ -13,9 +13,10 @@ import curses
 import os
 import sys
 
+from cdsswarm.tui import CursesTUI
+
 from cdsswarm.adapters import CursesAdapter
 from cdsswarm.core import SwarmDownloader, Task
-from cdsswarm.tui import CursesTUI
 
 NUM_WORKERS = 4
 OUTPUT_DIR = "output"
