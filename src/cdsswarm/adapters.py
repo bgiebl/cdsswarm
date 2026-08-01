@@ -129,7 +129,6 @@ class PlainTextAdapter(OutputAdapter):
         self,
         write_fn=None,
         use_color: bool | None = None,
-        interactive: bool | None = None,
     ):
         self._write = write_fn or print
         self._lock = threading.Lock()
@@ -142,10 +141,6 @@ class PlainTextAdapter(OutputAdapter):
             self._color = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
         else:
             self._color = use_color
-        if interactive is None:
-            self._interactive = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
-        else:
-            self._interactive = interactive
 
     def _worker_tag(self, worker_id: int) -> str:
         tag = f"[Worker {worker_id}]"

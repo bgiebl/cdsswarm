@@ -39,7 +39,6 @@ All CLI flags are supported as config keys (use hyphens, e.g. `max-retries`, `po
 | `reuse` | bool | `true` | Reuse existing CDS jobs with matching parameters |
 | `max-retries` | int | `3` | Max retry attempts per task (1 to disable) |
 | `output-dir` | string | | Prepend directory to relative target paths |
-| `ignore-warnings` | bool | `false` | Auto-continue on warnings |
 | `log` | string | | Write timestamped log to a file |
 | `summary` | string | | Export summary as JSON or CSV |
 | `post-hook` | string | | Shell command after each successful download |

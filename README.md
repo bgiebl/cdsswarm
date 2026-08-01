@@ -155,8 +155,7 @@ for r in results:
 usage: cdsswarm [-h] [--version] [-w WORKERS] [-m {interactive,script,auto}]
                 [--no-skip] [--resume | --no-resume] [--reuse | --no-reuse]
                 [--max-retries MAX_RETRIES] [--output-dir OUTPUT_DIR]
-                [--dry-run] [--ignore-warnings] [--log FILE] [--summary FILE]
-                [--post-hook CMD]
+                [--dry-run] [--log FILE] [--summary FILE] [--post-hook CMD]
                 requests_file
 ```
 
@@ -171,7 +170,6 @@ usage: cdsswarm [-h] [--version] [-w WORKERS] [-m {interactive,script,auto}]
 | `--max-retries` | Max retry attempts per task (default: 3, 1 to disable) |
 | `--output-dir` | Prepend directory to relative target paths |
 | `--dry-run` | Show what would be downloaded without actually downloading |
-| `--ignore-warnings` | Auto-continue on warnings without prompting |
 | `--log FILE` | Write timestamped log to a file |
 | `--summary FILE` | Export summary as JSON (`.json`) or CSV (`.csv`) |
 | `--post-hook CMD` | Shell command to run after each successful download (see below) |
