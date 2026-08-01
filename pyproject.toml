@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cdsswarm"
-version = "0.2.3"
+version = "0.3.0"
 description = "Concurrent CDS API downloader with TUI and script mode"
 readme = "README.md"
 license = "MIT"
