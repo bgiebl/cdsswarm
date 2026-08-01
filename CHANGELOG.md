@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Removed
+- `--ignore-warnings` CLI flag and the `ignore-warnings` config key. Both had been no-ops since checksum verification was removed in 0.1.6 — that dialog was the only interactive warning prompt. An `ignore-warnings` key left in `.cdsswarm.toml` is ignored, not an error.
+- `interactive` parameter of `PlainTextAdapter`. It backed the same removed dialog and was never read. Callers constructing the adapter directly must drop the keyword argument.
+
 ## [0.2.3] - 2026-03-03
 
 ### Changed

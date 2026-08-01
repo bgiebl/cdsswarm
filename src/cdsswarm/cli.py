@@ -196,7 +196,6 @@ def _run_script(
     reuse_jobs: bool = True,
     max_retries: int = 3,
     log_file=None,
-    ignore_warnings: bool = False,
     post_hook: str = "",
     on_task_done=None,
     on_request_id=None,
@@ -204,7 +203,7 @@ def _run_script(
     pre_messages=None,
 ):
     """Run downloads with plain text output."""
-    base_adapter: OutputAdapter = PlainTextAdapter(interactive=not ignore_warnings)
+    base_adapter: OutputAdapter = PlainTextAdapter()
     adapter: OutputAdapter = (
         LoggingAdapter(base_adapter, log_file) if log_file else base_adapter
     )
@@ -296,12 +295,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Show what would be downloaded without actually downloading",
-    )
-    parser.add_argument(
-        "--ignore-warnings",
-        action="store_true",
-        default=None,
-        help="Auto-continue on warnings without prompting",
     )
     parser.add_argument(
         "--log",
@@ -604,7 +597,6 @@ def _build_unified_parser() -> argparse.ArgumentParser:
     dl.add_argument("--max-retries", type=int)
     dl.add_argument("--output-dir")
     dl.add_argument("--dry-run", action="store_true")
-    dl.add_argument("--ignore-warnings", action="store_true")
     dl.add_argument("--log", metavar="FILE")
     dl.add_argument("--summary", metavar="FILE")
     dl.add_argument("--post-hook", metavar="CMD")
@@ -675,7 +667,6 @@ def main(argv: list[str] | None = None):
         "resume": args.resume,
         "reuse": args.reuse,
         "max_retries": args.max_retries,
-        "ignore_warnings": args.ignore_warnings if args.ignore_warnings else None,
         "output_dir": args.output_dir,
         "log": args.log,
         "summary": args.summary,
@@ -726,7 +717,6 @@ def main(argv: list[str] | None = None):
     resume = bool(settings["resume"])
     reuse = bool(settings["reuse"])
     max_retries = cast(int, settings["max_retries"])
-    ignore_warnings = bool(settings["ignore_warnings"])
     log_path = str(settings["log"])
     summary_path = str(settings["summary"])
     post_hook = str(settings["post_hook"])
@@ -847,7 +837,6 @@ def main(argv: list[str] | None = None):
                     reuse,
                     max_retries,
                     log_file=log_file,
-                    ignore_warnings=ignore_warnings,
                     post_hook=post_hook,
                     on_task_done=_on_task_done,
                     on_request_id=_on_request_id,

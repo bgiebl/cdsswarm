@@ -46,10 +46,7 @@ def main():
 
     num_workers = args.workers
     num_tasks = args.tasks
-    adapter = PlainTextAdapter(
-        interactive=False,
-        use_color=False if args.script else None,
-    )
+    adapter = PlainTextAdapter(use_color=False if args.script else None)
 
     # Build task list
     task_queue = []

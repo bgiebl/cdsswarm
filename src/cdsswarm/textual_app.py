@@ -868,23 +868,13 @@ class CdsswarmApp(App):
 
     def on_worker_started(self, msg: WorkerStarted) -> None:
         w = self.worker_data[msg.worker_id]
+        w.reset()
         w.cds_status = WorkerStatus.ACCEPTED
         w.filename = msg.filename
         w.dataset = msg.dataset
         w.request_params = msg.request
         w.target = msg.target
-        w.request_id = ""
         w.start_time = time.time()
-        w.finish_time = None
-        w.dl_bytes = 0
-        w.dl_total = 0
-        w.logs.clear()
-        w.file_size = None
-        w.server_created = None
-        w.server_started = None
-        w.server_finished = None
-        w.dataset_title = ""
-        w.request_labels = None
         w.logs.append(f"Started: {msg.filename}")
 
         wt = self.query_one("#worker-table", DataTable)
