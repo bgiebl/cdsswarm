@@ -33,7 +33,7 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: pytest -v --cov=cdsswarm --cov-report=xml --cov-report=term
       - if: matrix.python-version == '3.12'
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
